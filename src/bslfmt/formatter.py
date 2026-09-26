@@ -143,9 +143,14 @@ def _ends_operand(token) -> bool:
     text = token.text.rstrip()
     if not text:
         return False
-    if re.search(r"(?:\d+(?:[.,]\d*)?|[.,]\d+)[EeЕе]$", text):
+    # Обе проверки смотрят только на конец токена; поиск по всему тексту
+    # давал квадратичный откат на длинных числах и словах. Хвоста хватает:
+    # совпадение в конце полного текста остаётся совпадением в хвосте, а
+    # служебные слова заметно короче хвоста.
+    tail = text[-64:]
+    if re.search(r"(?:\d+(?:[.,]\d*)?|[.,]\d+)[EeЕе]$", tail):
         return False
-    last_word = re.search(r"[А-Яа-яЁёA-Za-z_]+$", text)
+    last_word = re.search(r"[А-Яа-яЁёA-Za-z_]+$", tail)
     if last_word and last_word.group().casefold() in {
         "возврат", "не", "и", "или", "по", "от", "до", "шаг"
     }:

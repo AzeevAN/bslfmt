@@ -2,6 +2,7 @@
 
 import json
 import tempfile
+import time
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
@@ -558,6 +559,18 @@ class FormatterTests(unittest.TestCase):
     def test_long_unary_operator_chain_does_not_recurse(self):
         source = "А = 1" + " -" * 10000 + " 1;\n"
         self.assertEqual(format_code(source), source)
+
+    def test_long_operand_before_operator_is_linear(self):
+        # Регулярки по всему токену давали квадратичный откат: 40 000 цифр — 25 с.
+        for operand in ("1" * 200_000, "ф" * 200_000, "1" * 200_000 + "E"):
+            source = f"А = {operand} + 1;\n"
+            with self.subTest(operand=operand[-3:]):
+                started = time.perf_counter()
+                format_code(source)
+                self.assertLess(time.perf_counter() - started, 5)
+        self.assertEqual(format_code("А = 1.5E-3;\n"), "А = 1.5E-3;\n")
+        self.assertEqual(format_code("А = Б-В;\n"), "А = Б - В;\n")
+        self.assertEqual(format_code("Возврат -В;\n"), "Возврат -В;\n")
 
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
