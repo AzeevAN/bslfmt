@@ -144,8 +144,15 @@ def _patch_regions(source: str) -> list[PatchRegion]:
     return regions
 
 
-def _active_source(source: str) -> tuple[str, list[PatchRegion]]:
-    """Создать служебный текст активной ветви с исходными координатами."""
+def _active_source(
+    source: str, hidden: str = "удаление"
+) -> tuple[str, list[PatchRegion]]:
+    """Создать служебный текст одного вида кода с исходными координатами.
+
+    hidden="удаление" — активный вид (код расширения), hidden="вставка" —
+    базовый вид (исходная конфигурация). Области вида hidden скрываются
+    целиком, у остальных — только строки директив.
+    """
     regions = _patch_regions(source)
     chars = list(source)
 
@@ -155,12 +162,23 @@ def _active_source(source: str) -> tuple[str, list[PatchRegion]]:
                 chars[index] = " "
 
     for region in regions:
-        if region.kind == "удаление":
+        if region.kind == hidden:
             hide(region.start, region.end)
         else:
             hide(region.start, region.opening_end)
             hide(region.closing_start, region.end)
     return "".join(chars), regions
+
+
+def _code_views(source: str) -> list[str]:
+    """Согласованные виды кода: сам текст или оба вида при правках расширения.
+
+    В сыром тексте с #Вставка/#Удаление видны обе альтернативы, и строка,
+    разделённая ими, не разбирается как одна: проверять токены нужно по видам.
+    """
+    if not _patch_regions(source):
+        return [source]
+    return [_active_source(source, hidden)[0] for hidden in ("удаление", "вставка")]
 
 
 def lex(source: str) -> list[Token]:

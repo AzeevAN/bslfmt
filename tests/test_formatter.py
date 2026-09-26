@@ -791,6 +791,38 @@ class FormatterTests(unittest.TestCase):
         source = 'Текст = "первая\n|#Вставка это текст запроса\n|вторая";\n'
         self.assertEqual(format_code(source), source)
 
+    def test_patch_alternatives_inside_multiline_string(self):
+        # Расширение заменяет строку запроса: в сыром тексте видны обе
+        # альтернативы и кавычки не парные, но каждый вид кода согласован.
+        source = (
+            "Процедура П()\n"
+            'Текст = "ВЫБРАТЬ\n'
+            "#Удаление\n"
+            "|  А\n"
+            "#КонецУдаления\n"
+            "#Вставка\n"
+            "|  Б\n"
+            "#КонецВставки\n"
+            '|  ИЗ Т";\n'
+            'Сообщить("Готово"+Текст);\n'
+            "КонецПроцедуры\n"
+        )
+        expected = (
+            "Процедура П()\n"
+            '\tТекст = "ВЫБРАТЬ\n'
+            "#Удаление\n"
+            "|  А\n"
+            "#КонецУдаления\n"
+            "#Вставка\n"
+            "|  Б\n"
+            "#КонецВставки\n"
+            '|  ИЗ Т";\n'
+            '\tСообщить("Готово" + Текст);\n'
+            "КонецПроцедуры\n"
+        )
+        self.assertEqual(format_code(source), expected)
+        self.assertEqual(format_code(expected), expected)
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(

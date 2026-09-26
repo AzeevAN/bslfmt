@@ -11,8 +11,10 @@ from .lexer import (
     _PATCH_CLOSE,
     _PATCH_OPEN,
     _active_source,
+    _code_views,
     _directive_name,
     _patch_regions,
+    LexerError,
     _split_lines,
     lex,
 )
@@ -823,14 +825,31 @@ def _significant_tokens(source: str) -> list:
 
 
 def _check_significant_tokens(source: str, result: str) -> None:
-    """Последний рубеж: форматтер меняет только пробелы и переводы строк."""
-    before = _significant_tokens(source)
-    after = _significant_tokens(result)
-    for old, new in zip(before, after):
-        if (old.kind, old.text) != (new.kind, new.text):
-            raise FormatError("форматирование изменило значимые токены", old.line)
-    if len(before) != len(after):
-        raise FormatError("форматирование изменило значимые токены")
+    """Последний рубеж: форматтер меняет только пробелы и переводы строк.
+
+    Сравнение идёт по каждому виду кода: при правках расширения — отдельно
+    для кода расширения и для исходной конфигурации. Текст внутри областей
+    правки — контекст, а не обязательно корректный BSL: если исходный вид
+    конфигурации не разбирается, сравнивать в нём нечего (сами области
+    копируются дословно), а вид кода расширения проверяется всегда.
+    """
+    before_views = _code_views(source)
+    after_views = _code_views(result)
+    if len(before_views) != len(after_views):
+        raise FormatError("форматирование изменило области расширения")
+    for number, (before_view, after_view) in enumerate(zip(before_views, after_views)):
+        try:
+            before = _significant_tokens(before_view)
+        except LexerError:
+            if number == 0:
+                raise
+            continue
+        after = _significant_tokens(after_view)
+        for old, new in zip(before, after):
+            if (old.kind, old.text) != (new.kind, new.text):
+                raise FormatError("форматирование изменило значимые токены", old.line)
+        if len(before) != len(after):
+            raise FormatError("форматирование изменило значимые токены")
 
 
 def format_code(
