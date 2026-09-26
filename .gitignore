@@ -59,8 +59,5 @@ build/
 dist/
 *.egg-info/
 
-# Локальная инвентаризация зависит от экспериментального кода MCP.
-/scripts/inventory.py
-
 .DS_Store
 *.log
