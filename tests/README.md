@@ -5,9 +5,16 @@
 неполном или неоднозначном коде. Все BSL-примеры в тестах заданы короткими
 строками; реальные модули и конфигурации в тестовый набор не входят.
 
-Запуск из корня клона:
+Запуск из корня клона — после установки пакета (`python -m pip install -e .`,
+см. корневой README):
 
 ```sh
 python -m unittest discover -s tests -v
 python -m bslfmt --help
+```
+
+Без установки укажите путь к исходникам:
+
+```sh
+PYTHONPATH=src python -m unittest discover -s tests -v
 ```

@@ -614,6 +614,39 @@ class FormatterTests(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertEqual(format_code(source), expected)
 
+    def test_cr_and_crlf_with_directives_and_patches(self):
+        lf = (
+            "#Область Р\n"
+            "Процедура П()\n"
+            "#Если Сервер Тогда\n"
+            "Сообщить(1);\n"
+            "#КонецЕсли\n"
+            "#Вставка\n"
+            "   Х=1;\n"
+            "#КонецВставки\n"
+            "КонецПроцедуры\n"
+            "#КонецОбласти\n"
+        )
+        expected = (
+            "#Область Р\n"
+            "Процедура П()\n"
+            "#Если Сервер Тогда\n"
+            "\tСообщить(1);\n"
+            "#КонецЕсли\n"
+            "#Вставка\n"
+            "   Х=1;\n"
+            "#КонецВставки\n"
+            "КонецПроцедуры\n"
+            "#КонецОбласти\n"
+        )
+        self.assertEqual(format_code(lf), expected)
+        for newline in ("\r\n", "\r"):
+            with self.subTest(newline=newline):
+                self.assertEqual(
+                    format_code(lf.replace("\n", newline)),
+                    expected.replace("\n", newline),
+                )
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(
@@ -818,6 +851,24 @@ class FormatterTests(unittest.TestCase):
             with redirect_stderr(StringIO()):
                 self.assertEqual(main([str(original), "--output", str(output)]), 2)
 
+
+    def test_cli_reports_format_error_without_output(self):
+        with tempfile.TemporaryDirectory() as temp:
+            original = Path(temp) / "module.bsl"
+            output = Path(temp) / "formatted.bsl"
+            original.write_text("КонецЕсли;\n", encoding="utf-8")
+            stderr = StringIO()
+            with redirect_stderr(stderr), redirect_stdout(StringIO()):
+                self.assertEqual(main([str(original), "--output", str(output)]), 2)
+            self.assertTrue(stderr.getvalue().startswith("bslfmt: "))
+            self.assertFalse(output.exists())
+
+    def test_cli_reads_standard_input(self):
+        stdout = StringIO()
+        with mock.patch("sys.stdin", StringIO("Процедура П()\nА=1;\nКонецПроцедуры\n")), \
+                redirect_stdout(stdout):
+            self.assertEqual(main(["-"]), 0)
+        self.assertEqual(stdout.getvalue(), "Процедура П()\n\tА = 1;\nКонецПроцедуры\n")
 
 if __name__ == "__main__":
     unittest.main()
