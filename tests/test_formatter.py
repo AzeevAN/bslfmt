@@ -692,6 +692,29 @@ class FormatterTests(unittest.TestCase):
             format_code("\ufeffА=1;\n", max_chars=5)
         format_code("А=1;\n" * 10, max_chars=None)
 
+    def test_format_error_reports_line(self):
+        cases = (
+            ("Процедура П()\nСообщить(1);\nКонецЕсли;\nКонецПроцедуры\n", 3),
+            ("Процедура П()\nЕсли А Тогда\nСообщить(1);\n", 2),
+            ("#Область Р\nА = 1;\n", 1),
+            ("А = 1;\n#КонецОбласти\n", 2),
+            ("\ufeffА = 1;\nФ(1));\n", 2),
+            ("А = 1;\n#Вставка\nБ = 2;\n#КонецВставки\nКонецЦикла;\n", 5),
+        )
+        for source, line in cases:
+            with self.subTest(source=source):
+                with self.assertRaises(FormatError) as caught:
+                    format_code(source)
+                self.assertEqual(caught.exception.line, line)
+                self.assertIn(f"строка {line}", str(caught.exception))
+        self.assertIsNone(FormatError("x").line)
+        self.assertEqual(str(FormatError("x")), "x")
+
+    def test_lexer_error_reports_position(self):
+        with self.assertRaises(LexerError) as caught:
+            format_code('А = 1;\nБ = "без конца\n')
+        self.assertEqual((caught.exception.line, caught.exception.column), (2, 5))
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(

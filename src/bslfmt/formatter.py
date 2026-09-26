@@ -4,13 +4,21 @@ from __future__ import annotations
 
 import re
 from bisect import bisect_left, bisect_right
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from .lexer import _NEWLINE, _active_source, _patch_regions, _split_lines, lex
 
 
 class FormatError(ValueError):
-    """Фрагмент нельзя безопасно форматировать."""
+    """Фрагмент нельзя безопасно форматировать.
+
+    line — номер строки (с 1), к которой относится отказ, если он известен.
+    """
+
+    def __init__(self, message: str, line: int | None = None) -> None:
+        self.message = message
+        self.line = line
+        super().__init__(message if line is None else f"{message} (строка {line})")
 
 
 # Лимиты защищают от недоверенного ввода: размер результата растёт как
@@ -79,6 +87,9 @@ _EXPRESSION_STARTERS = frozenset({
 class _Block:
     opener: str
     branch: str = ""
+    # Строка открытия нужна только для диагностики и не участвует в сравнении
+    # состояний ветвей #Если.
+    line: int | None = field(default=None, compare=False)
 
 
 @dataclass
@@ -98,7 +109,7 @@ class _Conditional:
 
 
 def _copy_stack(stack: list[_Block]) -> list[_Block]:
-    return [_Block(block.opener, block.branch) for block in stack]
+    return [_Block(block.opener, block.branch, block.line) for block in stack]
 
 
 _REGION_DIRECTIVES = {
@@ -364,8 +375,23 @@ def _scan_brackets(code: str, brackets: list[str]) -> None:
                 raise FormatError("несогласованные скобки")
 
 
+@dataclass
+class _Position:
+    line: int | None = None
+
+
 def _format_active_code(source: str, max_depth: int | None) -> str:
     """Выравнять только отступы распознанных блоков; при сомнении отказать."""
+    cursor = _Position()
+    try:
+        return _format_lines(source, max_depth, cursor)
+    except FormatError as error:
+        if error.line is None and cursor.line is not None:
+            raise FormatError(error.message, cursor.line) from None
+        raise
+
+
+def _format_lines(source: str, max_depth: int | None, cursor: _Position) -> str:
     masked, strings, literal_starts, opaque_lines = _masked_code(source)
 
     def literal_starts_between(start: int, end: int) -> bool:
@@ -382,7 +408,9 @@ def _format_active_code(source: str, max_depth: int | None) -> str:
     region_stack: list[int] = []
     conditional_lines: dict[int, str] = {}
     conditional_syntax: list[bool] = []
+    conditional_starts: list[int] = []
     for number, code in enumerate(code_lines):
+        cursor.line = number + 1
         directive = code.lstrip(" \t\f")
         if not directive.startswith("#"):
             continue
@@ -405,6 +433,7 @@ def _format_active_code(source: str, max_depth: int | None) -> str:
             conditional_lines[number] = kind
             if kind == "если":
                 conditional_syntax.append(False)
+                conditional_starts.append(number + 1)
             elif kind == "иначеесли":
                 if not conditional_syntax or conditional_syntax[-1]:
                     raise FormatError("ИначеЕсли вне активной ветви")
@@ -416,12 +445,14 @@ def _format_active_code(source: str, max_depth: int | None) -> str:
                 raise FormatError("#КонецЕсли без #Если")
             else:
                 conditional_syntax.pop()
+                conditional_starts.pop()
         else:
             return source
+    cursor.line = None
     if region_stack:
-        raise FormatError("незакрытая область")
+        raise FormatError("незакрытая область", region_stack[-1] + 1)
     if conditional_syntax:
-        raise FormatError("незакрытый #Если")
+        raise FormatError("незакрытый #Если", conditional_starts[-1])
 
     stack: list[_Block] = []
     conditionals: list[_Conditional] = []
@@ -451,15 +482,16 @@ def _format_active_code(source: str, max_depth: int | None) -> str:
         if brackets:
             raise FormatError("незакрытые скобки в условии")
         if header_kind == "Если":
-            push(_Block("Если"))
+            push(_Block("Если", line=cursor.line))
         elif header_kind == "ИначеЕсли":
             if not stack or stack[-1].opener != "Если":
                 raise FormatError("ИначеЕсли вне блока Если")
             stack[-1].branch = "ИначеЕсли"
         else:
-            push(_Block(header_kind))
+            push(_Block(header_kind, line=cursor.line))
 
     for number, (line, code) in enumerate(zip(lines, code_lines)):
+        cursor.line = number + 1
         while string_index < len(strings) and strings[string_index][1] <= offset:
             string_index += 1
         inside_string = (
@@ -685,7 +717,7 @@ def _format_active_code(source: str, max_depth: int | None) -> str:
                     break
                 if keyword in {"Процедура", "Функция"} and stack:
                     raise FormatError("вложенное объявление пока не поддерживается")
-                push(_Block(keyword))
+                push(_Block(keyword, line=number + 1))
             elif keyword in _BRANCH and keyword != "Иначе":
                 if not stack or stack[-1].opener != _BRANCH[keyword]:
                     raise FormatError(f"ветвь вне блока: {keyword}")
@@ -715,12 +747,13 @@ def _format_active_code(source: str, max_depth: int | None) -> str:
         if starts_branch_call and brackets:
             continuation_depth = len(stack)
 
+    cursor.line = None
     if pending_header is not None:
         raise FormatError("незавершённое многострочное условие")
     if brackets:
         raise FormatError("незакрытое выражение")
     if stack:
-        raise FormatError(f"незакрытый блок: {stack[-1].opener}")
+        raise FormatError(f"незакрытый блок: {stack[-1].opener}", stack[-1].line)
     if conditionals:
         raise FormatError("незакрытая условная ветвь")
     spaced = _space_binary_operators("".join(result))
@@ -741,12 +774,22 @@ def _protected_patch_lines(source: str) -> set[int]:
     return protected
 
 
-def _significant_tokens(source: str) -> list[tuple[str, str]]:
+def _significant_tokens(source: str) -> list:
     return [
-        (token.kind, token.text)
-        for token in lex(source)
+        token for token in lex(source)
         if token.kind not in {"whitespace", "newline"}
     ]
+
+
+def _check_significant_tokens(source: str, result: str) -> None:
+    """Последний рубеж: форматтер меняет только пробелы и переводы строк."""
+    before = _significant_tokens(source)
+    after = _significant_tokens(result)
+    for old, new in zip(before, after):
+        if (old.kind, old.text) != (new.kind, new.text):
+            raise FormatError("форматирование изменило значимые токены", old.line)
+    if len(before) != len(after):
+        raise FormatError("форматирование изменило значимые токены")
 
 
 def format_code(
@@ -767,9 +810,7 @@ def format_code(
     if source.startswith("\ufeff"):
         return "\ufeff" + format_code(source[1:], max_chars=None, max_depth=max_depth)
     result = _format_with_patches(source, max_depth)
-    # Последний рубеж: форматтер меняет только пробелы и переводы строк.
-    if _significant_tokens(result) != _significant_tokens(source):
-        raise FormatError("форматирование изменило значимые токены")
+    _check_significant_tokens(source, result)
     return result
 
 

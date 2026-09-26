@@ -19,7 +19,17 @@ class Token:
 
 
 class LexerError(ValueError):
-    """Исходник нельзя безопасно разобрать без догадок."""
+    """Исходник нельзя безопасно разобрать без догадок.
+
+    line и column — позиция начала проблемного фрагмента (с 1).
+    """
+
+    def __init__(
+        self, message: str, line: int | None = None, column: int | None = None
+    ) -> None:
+        self.line = line
+        self.column = column
+        super().__init__(message)
 
 
 _PATCH_OPEN = {
@@ -254,7 +264,9 @@ def lex(source: str) -> list[Token]:
                 column += 1
             if not closed and index not in patch_by_start:
                 raise LexerError(
-                    f"незакрытая строка в строке {start_line}, колонке {start_column}"
+                    f"незакрытая строка в строке {start_line}, колонке {start_column}",
+                    start_line,
+                    start_column,
                 )
             add("string", start, start_line, start_column)
             continue
@@ -268,7 +280,9 @@ def lex(source: str) -> list[Token]:
                 column += 1
             if index >= length or source[index] != "'":
                 raise LexerError(
-                    f"незакрытый литерал даты в строке {start_line}, колонке {start_column}"
+                    f"незакрытый литерал даты в строке {start_line}, колонке {start_column}",
+                    start_line,
+                    start_column,
                 )
             index += 1
             column += 1
