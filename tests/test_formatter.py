@@ -128,7 +128,7 @@ class FormatterTests(unittest.TestCase):
         expected = (
             "Procedure Example()\n"
             "\tIf FirstCondition\n"
-            "\tOr SecondCondition Then Continue; EndIf;\n"
+            "\t\tOr SecondCondition Then Continue; EndIf;\n"
             "EndProcedure\n"
         )
         actual = format_code(source)
@@ -447,7 +447,7 @@ class FormatterTests(unittest.TestCase):
             "Если Условие Тогда\n"
             "\tСообщить(1);\n"
             "ИначеЕсли (\n"
-            "Условие2\n"
+            "\tУсловие2\n"
             ") Тогда\n"
             "\tСообщить(2);\n"
             "КонецЕсли;\n"
@@ -1007,6 +1007,21 @@ class FormatterTests(unittest.TestCase):
                 self.assertEqual(format_code(source), expected)
                 self.assertEqual(format_code(expected), expected)
 
+    def test_condition_continuation_gets_at_least_one_extra_indent(self):
+        cases = (
+            ("Процедура П()\nЕсли А\nИ Б\nИли В Тогда\nГ = 1;\nИначеЕсли Д\nИ Е Тогда\nКонецЕсли;\n"
+             "Пока А\nИ Б Цикл\nКонецЦикла;\nКонецПроцедуры\n",
+             "Процедура П()\n\tЕсли А\n\t\tИ Б\n\t\tИли В Тогда\n\t\tГ = 1;\n\tИначеЕсли Д\n"
+             "\t\tИ Е Тогда\n\tКонецЕсли;\n\tПока А\n\t\tИ Б Цикл\n\tКонецЦикла;\nКонецПроцедуры\n"),
+            # выравнивание по первому условию (глубже +1) сохраняется
+            ("Процедура П()\n\tЕсли А\n\t     И Б Тогда\n\tКонецЕсли;\nКонецПроцедуры\n",
+             "Процедура П()\n\tЕсли А\n\t     И Б Тогда\n\tКонецЕсли;\nКонецПроцедуры\n"),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(format_code(source), expected)
+                self.assertEqual(format_code(expected), expected)
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(
@@ -1185,7 +1200,7 @@ class FormatterTests(unittest.TestCase):
         expected = (
             "Процедура Пример()\n"
             "\tПока (УсловиеА\n"
-            "\tИ УсловиеБ) Цикл\n"
+            "\t\tИ УсловиеБ) Цикл\n"
             "\t\tОбработать();\n"
             "\tКонецЦикла;\n"
             "КонецПроцедуры\n"

@@ -758,7 +758,10 @@ class _LineFormatter:
                     "структурное слово внутри многострочного условия"
                 )
         _scan_brackets(code, self.brackets)
-        self.result.append(_reindent(line, header_depth))
+        # std444 п.5: условие продолжается со стандартным отступом или по
+        # первому условию; строка с «)» в начале — на уровне заголовка.
+        same_level = line.lstrip(" \t\f").startswith(")")
+        self.result.append(_continuation_indent(line, header_depth + (0 if same_level else 1)))
         if terminator_end is not None:
             self._complete_pending_header(header_kind)
             self.pending_header = None
