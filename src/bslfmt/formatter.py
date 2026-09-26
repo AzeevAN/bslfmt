@@ -428,6 +428,8 @@ def _format_active_code(
 
 
 _TRAILING_OPERATOR = re.compile(r"(?:[+*/%=<>,.-]|\b(?:И|ИЛИ|НЕ)\b)\s*$", re.IGNORECASE)
+# Одиночный Возврат в конце строки кода: значение — на следующей строке.
+_BARE_RETURN = re.compile(r"(?<![\w.])(?:Возврат|Return)$", re.IGNORECASE)
 
 
 def _scan_directives(
@@ -579,9 +581,12 @@ class _LineFormatter:
         # На сколько колонок сдвинута первая строка текущей инструкции или
         # заголовка: выровненные глубже продолжения сдвигаются так же.
         self.statement_delta = 0
-        # Предыдущая строка кода кончается «=»: текст запроса на следующей
-        # строке — на уровне инструкции (см. _note_line_end).
+        # Предыдущая строка кода кончается «=» или одиночным Возврат: текст
+        # запроса на следующей строке — на уровне инструкции (_note_line_end).
         self.value_expected = False
+        # Предыдущая строка кода кончается одиночным Возврат: следующая строка
+        # без структурных слов — его значение, продолжение инструкции.
+        self.return_pending = False
         # Строки-комментарии, ждущие отступа следующей строки кода.
         self.pending_comments: list[int] = []
         self.last_dedent = False
@@ -594,9 +599,11 @@ class _LineFormatter:
             self.cursor.line = number + 1
             inside_string = self._advance(line)
             if number in self.opaque_lines:
+                self.return_pending = False
                 self.pending_comments.clear()
                 self.result.append(line)
             elif inside_string:
+                self.return_pending = False
                 self.pending_comments.clear()
                 self._string_tail_line(line, code)
             elif not line.strip(" \t\f\r\n"):
@@ -615,9 +622,11 @@ class _LineFormatter:
                     self.pending_comments.append(len(self.result))
                 self.result.append(line)
             elif number in region_lines:
+                self.return_pending = False
                 self.pending_comments.clear()
                 self._region_line(line)
             elif number in conditional_lines:
+                self.return_pending = False
                 self.pending_comments.clear()
                 self._conditional_line(line, conditional_lines[number])
             else:
@@ -714,7 +723,7 @@ class _LineFormatter:
         return inside_string
 
     def _note_line_end(self, line: str, code: str, inside_string: bool) -> None:
-        """Запомнить, ждёт ли конец строки значения (кончается ли «=»).
+        """Запомнить, ждёт ли конец строки значения («=» или одиночный Возврат).
 
         Литерал после последнего знака кода и конец многострочного литерала
         признак сбрасывают; комментарии и пустые строки его не меняют,
@@ -729,7 +738,9 @@ class _LineFormatter:
         if self._literal_starts_between(line_start + len(code_tail), self.offset):
             self.value_expected = False
         else:
-            self.value_expected = code_tail.endswith("=")
+            self.value_expected = (
+                code_tail.endswith("=") or _BARE_RETURN.search(code_tail) is not None
+            )
 
     # Виды строк
 
@@ -850,9 +861,15 @@ class _LineFormatter:
                 self.continuation_depth = None
 
     def _statement_line(self, line: str, code: str, number: int) -> None:
+        after_return = self.return_pending
+        self.return_pending = False
         was_continuation = bool(self.brackets) or self.operator_continuation
         _scan_brackets(code, self.brackets)
         keywords = _line_keywords(code)
+        if after_return and not was_continuation and not keywords:
+            # Значение одиночного Возврат — продолжение его инструкции.
+            self.continuation_depth = len(self.stack)
+            was_continuation = True
         first_keyword = keywords[0][0] if keywords else ""
         starts_multiline_condition = (
             first_keyword in {"Если", "ИначеЕсли"}
@@ -909,6 +926,9 @@ class _LineFormatter:
         self._apply_keywords(code, keywords, depth, number)
         if starts_branch_call and self.brackets:
             self.continuation_depth = len(self.stack)
+        if (not self.brackets and self.pending_header is None
+                and _BARE_RETURN.search(code.rstrip(" \t\f\r\n"))):
+            self.return_pending = True
 
     def _continuation_line(
         self, line: str, keywords, was_continuation: bool, trailing_operator
