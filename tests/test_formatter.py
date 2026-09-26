@@ -948,6 +948,12 @@ class FormatterTests(unittest.TestCase):
             with self.subTest(before=before), self.assertRaises(FormatError):
                 formatter._check_significant_tokens(before, after)
 
+    def test_significant_check_is_not_fooled_by_signature_marks(self):
+        with self.assertRaises(FormatError):
+            formatter._check_significant_tokens("А Б;\n", "А\x00Б;\n")
+        # тот же код с управляющим символом — без отказа
+        formatter._check_significant_tokens("А\x01Б;\n", "А\x01Б;\n")
+
     def test_at_most_one_blank_line_in_a_row(self):
         cases = (
             ("\n\nПроцедура П()\r\n\r\n\t\r\n\r\nА=1;\r\n\r\nКонецПроцедуры\n\n\n",

@@ -1006,6 +1006,12 @@ def _is_word_char(char: str) -> bool:
     return char.isalnum() or char == "_"
 
 
+# Разделители быстрой сигнатуры. Если они есть в самом тексте, сигнатуры
+# разных последовательностей токенов могут совпасть — тогда сравнение идёт
+# по единицам.
+_SIGNATURE_MARKS = re.compile("[\x00-\x03]")
+
+
 def _significant_signature(rows) -> str:
     """Значимый текст одной строкой — быстрый эквивалент _significant_units.
 
@@ -1077,7 +1083,8 @@ def _check_significant_tokens(
                 if not (row[_KIND] == "comment" and row[_LINE] in stripped)
             ]
         after_rows = _token_rows(after_view)
-        if _significant_signature(before_rows) == _significant_signature(after_rows):
+        fast = not (_SIGNATURE_MARKS.search(before_view) or _SIGNATURE_MARKS.search(after_view))
+        if fast and _significant_signature(before_rows) == _significant_signature(after_rows):
             continue
         # Расхождение: медленное сравнение по единицам — ради номера строки.
         before = _significant_units(before_rows)
