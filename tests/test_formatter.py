@@ -904,6 +904,20 @@ class FormatterTests(unittest.TestCase):
                 self.assertEqual(format_code(source), expected)
                 self.assertEqual(format_code(expected), expected)
 
+    def test_directives_annotations_and_module_code_start_at_column_zero(self):
+        source = (
+            "\t#Область Основная\n  Перем А Экспорт;\n\t&НаСервере\nПроцедура П()\n"
+            "\t\t\t#Если Сервер Тогда\nБ=1;\n  #КонецЕсли\nКонецПроцедуры\n"
+            "   В = 1;\n\t#КонецОбласти\n"
+        )
+        expected = (
+            "#Область Основная\nПерем А Экспорт;\n&НаСервере\nПроцедура П()\n"
+            "#Если Сервер Тогда\n\tБ = 1;\n#КонецЕсли\nКонецПроцедуры\n"
+            "В = 1;\n#КонецОбласти\n"
+        )
+        self.assertEqual(format_code(source), expected)
+        self.assertEqual(format_code(expected), expected)
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(
@@ -959,8 +973,8 @@ class FormatterTests(unittest.TestCase):
         )
         self.assertEqual(format_code(source), expected)
 
-    def test_unknown_top_level_indent_is_preserved(self):
-        self.assertEqual(format_code("    Сообщить(1);\n"), "    Сообщить(1);\n")
+    def test_top_level_code_starts_at_column_zero(self):
+        self.assertEqual(format_code("    Сообщить(1);\n"), "Сообщить(1);\n")
 
     def test_continuation_and_inline_branches(self):
         source = (

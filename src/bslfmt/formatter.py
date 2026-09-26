@@ -616,7 +616,8 @@ class _LineFormatter:
     def _region_line(self, line: str) -> None:
         if self.brackets or self.operator_continuation or self.pending_header is not None:
             raise FormatError("область внутри незавершённого выражения или условия")
-        self.result.append(line)
+        # Директивы препроцессора — с колонки 0 (std456 п.5.1).
+        self.result.append(_reindent(line, 0))
 
     def _conditional_line(self, line: str, kind: str) -> None:
         if kind == "если":
@@ -642,7 +643,7 @@ class _LineFormatter:
                     "ветви #Если завершаются разным структурным состоянием"
                 )
             self._restore(branch_ends[0])
-        self.result.append(line)
+        self.result.append(_reindent(line, 0))
 
     def _pending_header_line(self, line: str, code: str) -> None:
         """Продолжение многострочного заголовка Если/ИначеЕсли/Для/Пока."""
@@ -726,10 +727,8 @@ class _LineFormatter:
         dedent_branch = first_keyword in _CLOSE or first_keyword in _BRANCH
         depth = len(self.stack) - dedent_branch
         self.last_dedent = dedent_branch and bool(self.stack)
-        if self.stack or keywords:
-            self.result.append(_reindent(line, depth))
-        else:
-            self.result.append(line)
+        # Вне блоков (аннотации, переменные и код модуля) — колонка 0 (std456 п.5.1).
+        self.result.append(_reindent(line, depth))
 
         if starts_multiline_declaration:
             self.continuation_depth = depth + 1
