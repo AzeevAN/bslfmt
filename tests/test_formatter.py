@@ -870,5 +870,16 @@ class FormatterTests(unittest.TestCase):
             self.assertEqual(main(["-"]), 0)
         self.assertEqual(stdout.getvalue(), "Процедура П()\n\tА = 1;\nКонецПроцедуры\n")
 
+    def test_cli_removes_partial_output_when_write_fails(self):
+        with tempfile.TemporaryDirectory() as temp:
+            original = Path(temp) / "module.bsl"
+            output = Path(temp) / "formatted.bsl"
+            original.write_text("Сообщить(1);\n", encoding="utf-8")
+            # Одиночный суррогат не кодируется в UTF-8: запись падает.
+            with mock.patch("bslfmt.__main__.format_code", return_value="\ud800"), \
+                    redirect_stderr(StringIO()):
+                self.assertEqual(main([str(original), "--output", str(output)]), 2)
+            self.assertFalse(output.exists())
+
 if __name__ == "__main__":
     unittest.main()

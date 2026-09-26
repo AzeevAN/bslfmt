@@ -29,8 +29,15 @@ def main(argv: list[str] | None = None) -> int:
         if args.output:
             if args.file != "-" and args.output.resolve() == Path(args.file).resolve():
                 raise FormatError("выходной файл должен отличаться от исходного")
-            with args.output.open("x", encoding="utf-8", newline="") as stream:
-                stream.write(formatted)
+            # Режим "x" создаёт только новый файл, поэтому при сбое записи
+            # удаляем именно свой неполный файл: он не блокирует повторный запуск.
+            stream = args.output.open("x", encoding="utf-8", newline="")
+            try:
+                with stream:
+                    stream.write(formatted)
+            except BaseException:
+                args.output.unlink(missing_ok=True)
+                raise
         elif args.diff:
             sys.stdout.writelines(difflib.unified_diff(
                 _split_lines(source),
