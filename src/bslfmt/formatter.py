@@ -117,6 +117,9 @@ class _FormatState:
     operator_continuation: bool
     continuation_depth: int | None
     pending_header: tuple[str, int] | None
+    # Восстанавливается в каждой ветви #Если, но в сверку ветвей не входит:
+    # это подсказка отступа, а не структура.
+    value_expected: bool = field(default=False, compare=False)
 
 
 @dataclass
@@ -576,8 +579,9 @@ class _LineFormatter:
         # На сколько колонок сдвинута первая строка текущей инструкции или
         # заголовка: выровненные глубже продолжения сдвигаются так же.
         self.statement_delta = 0
-        # Последний значимый знак предыдущей строки кода (для «=» в конце).
-        self.previous_code_end = ""
+        # Предыдущая строка кода кончается «=»: текст запроса на следующей
+        # строке — на уровне инструкции (см. _note_line_end).
+        self.value_expected = False
         # Строки-комментарии, ждущие отступа следующей строки кода.
         self.pending_comments: list[int] = []
         self.last_dedent = False
@@ -626,9 +630,9 @@ class _LineFormatter:
                 self._place_comments(self.result[code_index])
             if not inside_string:
                 self.literal_delta = _lead_width(self.result[-1]) - _lead_width(line)
-            code_tail = code.rstrip(" \t\f\r\n")
-            if code_tail:
-                self.previous_code_end = code_tail[-1]
+            if (number not in region_lines and number not in conditional_lines
+                    and number not in self.opaque_lines):
+                self._note_line_end(line, code, inside_string)
         self._finish()
         return _normalize_spacing("".join(self.result), collapse_blank_lines)
 
@@ -661,6 +665,7 @@ class _LineFormatter:
             operator_continuation=self.operator_continuation,
             continuation_depth=self.continuation_depth,
             pending_header=self.pending_header,
+            value_expected=self.value_expected,
         )
 
     def _restore(self, state: _FormatState) -> None:
@@ -669,6 +674,7 @@ class _LineFormatter:
         self.operator_continuation = state.operator_continuation
         self.continuation_depth = state.continuation_depth
         self.pending_header = state.pending_header
+        self.value_expected = state.value_expected
 
     def _push(self, block: _Block) -> None:
         if self.max_depth is not None and len(self.stack) >= self.max_depth:
@@ -706,6 +712,24 @@ class _LineFormatter:
         )
         self.offset += len(line)
         return inside_string
+
+    def _note_line_end(self, line: str, code: str, inside_string: bool) -> None:
+        """Запомнить, ждёт ли конец строки значения (кончается ли «=»).
+
+        Литерал после последнего знака кода и конец многострочного литерала
+        признак сбрасывают; комментарии и пустые строки его не меняют,
+        директивы сюда не попадают.
+        """
+        code_tail = code.rstrip(" \t\f\r\n")
+        if not code_tail:
+            if inside_string:
+                self.value_expected = False
+            return
+        line_start = self.offset - len(line)
+        if self._literal_starts_between(line_start + len(code_tail), self.offset):
+            self.value_expected = False
+        else:
+            self.value_expected = code_tail.endswith("=")
 
     # Виды строк
 
@@ -898,7 +922,7 @@ class _LineFormatter:
             # «=» — на уровне инструкции (так в типовых и в примере std437).
             body = line.lstrip(" \t\f")
             same_level = body.startswith(")") or (
-                body.startswith('"') and self.previous_code_end == "="
+                body.startswith('"') and self.value_expected
             )
             depth = self.continuation_depth + (0 if same_level else 1)
             indented = _continuation_indent(line, depth, self.statement_delta)
