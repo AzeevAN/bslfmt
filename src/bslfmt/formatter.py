@@ -832,6 +832,8 @@ class _LineFormatter:
         # std444 п.5: условие продолжается со стандартным отступом или по
         # первому условию; строка с «)» в начале — на уровне заголовка.
         same_level = line.lstrip(" \t\f").startswith(")")
+        if same_level:
+            self.last_dedent = True
         self.result.append(_continuation_indent(
             line, header_depth + (0 if same_level else 1), self.statement_delta
         ))
@@ -924,6 +926,9 @@ class _LineFormatter:
             same_level = body.startswith(")") or (
                 body.startswith('"') and self.value_expected
             )
+            if body.startswith(")"):
+                # Комментарий над «)» относится к параметрам — на уровень глубже.
+                self.last_dedent = True
             depth = self.continuation_depth + (0 if same_level else 1)
             indented = _continuation_indent(line, depth, self.statement_delta)
             if same_level and _lead_width(indented) < (depth + 1) * 4:
