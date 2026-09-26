@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from .formatter import FormatError, format_code
-from .lexer import LexerError
+from .lexer import LexerError, _split_lines
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -33,8 +33,8 @@ def main(argv: list[str] | None = None) -> int:
                 stream.write(formatted)
         elif args.diff:
             sys.stdout.writelines(difflib.unified_diff(
-                source.splitlines(keepends=True),
-                formatted.splitlines(keepends=True),
+                _split_lines(source),
+                _split_lines(formatted),
                 fromfile=args.file,
                 tofile=f"{args.file} (formatted)",
             ))

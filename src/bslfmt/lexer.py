@@ -27,6 +27,23 @@ _PATCH_OPEN = {
     "удаление": "конецудаления",
 }
 _PATCH_CLOSE = {value: key for key, value in _PATCH_OPEN.items()}
+_NEWLINE = re.compile(r"\r\n|\r|\n")
+
+
+def _split_lines(source: str) -> list[str]:
+    """Разбить текст на строки с переводами только по CR, LF и CRLF.
+
+    В отличие от str.splitlines(), символы \v, \f, \x85, \u2028 и подобные
+    остаются внутри строки, как и в самом лексере.
+    """
+    lines = []
+    start = 0
+    for match in _NEWLINE.finditer(source):
+        lines.append(source[start:match.end()])
+        start = match.end()
+    if start < len(source):
+        lines.append(source[start:])
+    return lines
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,7 +64,7 @@ def _patch_regions(source: str) -> list[PatchRegion]:
     """
     lines: list[tuple[int, int, int, str]] = []
     offset = 0
-    for match in re.finditer(r"\r\n|\r|\n", source):
+    for match in _NEWLINE.finditer(source):
         line = source[offset:match.start()]
         lines.append((offset, match.start(), match.end(), line))
         offset = match.end()
@@ -143,7 +160,7 @@ def lex(source: str) -> list[Token]:
         if index in patch_by_start:
             end = patch_by_start[index]
             text = source[index:end]
-            newlines = list(re.finditer(r"\r\n|\r|\n", text))
+            newlines = list(_NEWLINE.finditer(text))
             if newlines:
                 line += len(newlines)
                 column = len(text) - newlines[-1].end() + 1

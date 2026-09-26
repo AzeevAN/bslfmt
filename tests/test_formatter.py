@@ -6,8 +6,9 @@ import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
+from unittest import mock
 
-from bslfmt import FormatError, LexerError, format_code, lex
+from bslfmt import FormatError, LexerError, format_code, formatter, lex
 from bslfmt.__main__ import main
 
 
@@ -498,27 +499,61 @@ class FormatterTests(unittest.TestCase):
     def test_byte_order_mark_before_first_line_directive(self):
         cases = (
             (
-                "﻿#Область Р\nПроцедура П()\nСообщить(1);\nКонецПроцедуры\n#КонецОбласти\n",
-                "﻿#Область Р\nПроцедура П()\n\tСообщить(1);\nКонецПроцедуры\n#КонецОбласти\n",
+                "\ufeff#Область Р\nПроцедура П()\nСообщить(1);\nКонецПроцедуры\n#КонецОбласти\n",
+                "\ufeff#Область Р\nПроцедура П()\n\tСообщить(1);\nКонецПроцедуры\n#КонецОбласти\n",
             ),
             (
-                "﻿#Если Сервер Тогда\nПроцедура П()\nСообщить(1);\nКонецПроцедуры\n#КонецЕсли\n",
-                "﻿#Если Сервер Тогда\nПроцедура П()\n\tСообщить(1);\nКонецПроцедуры\n#КонецЕсли\n",
+                "\ufeff#Если Сервер Тогда\nПроцедура П()\nСообщить(1);\nКонецПроцедуры\n#КонецЕсли\n",
+                "\ufeff#Если Сервер Тогда\nПроцедура П()\n\tСообщить(1);\nКонецПроцедуры\n#КонецЕсли\n",
             ),
             (
-                "﻿#Вставка\nСообщить(1);\n#КонецВставки\nПроцедура П()\nСообщить(2);\nКонецПроцедуры\n",
-                "﻿#Вставка\nСообщить(1);\n#КонецВставки\nПроцедура П()\n\tСообщить(2);\nКонецПроцедуры\n",
+                "\ufeff#Вставка\nСообщить(1);\n#КонецВставки\nПроцедура П()\nСообщить(2);\nКонецПроцедуры\n",
+                "\ufeff#Вставка\nСообщить(1);\n#КонецВставки\nПроцедура П()\n\tСообщить(2);\nКонецПроцедуры\n",
             ),
             (
-                "﻿Процедура П()\nСообщить(1);\nКонецПроцедуры\n",
-                "﻿Процедура П()\n\tСообщить(1);\nКонецПроцедуры\n",
+                "\ufeffПроцедура П()\nСообщить(1);\nКонецПроцедуры\n",
+                "\ufeffПроцедура П()\n\tСообщить(1);\nКонецПроцедуры\n",
             ),
-            ("﻿", "﻿"),
+            ("\ufeff", "\ufeff"),
         )
         for source, expected in cases:
             with self.subTest(source=source):
                 self.assertEqual(format_code(source), expected)
                 self.assertEqual(format_code(expected), expected)
+
+    def test_only_cr_lf_and_crlf_break_lines(self):
+        # str.splitlines() режет ещё по \v, \f, \x85, \u2028 и т. п.; для BSL
+        # это обычные символы строки, как и в лексере.
+        for separator in ("\u2028", "\u2029", "\x85", "\v", "\x1c"):
+            source = f"Процедура П()\nА = 1;{separator}Б = 2;\nКонецПроцедуры\n"
+            expected = f"Процедура П()\n\tА = 1;{separator}Б = 2;\nКонецПроцедуры\n"
+            with self.subTest(separator=separator):
+                self.assertEqual(format_code(source), expected)
+        source = (
+            "Процедура П()\n"
+            "А = 1;\f\n"
+            "#Вставка\n"
+            "   Х=1;\n"
+            "#КонецВставки\n"
+            "Б = 2;\n"
+            "КонецПроцедуры\n"
+        )
+        expected = (
+            "Процедура П()\n"
+            "\tА = 1;\n"
+            "#Вставка\n"
+            "   Х=1;\n"
+            "#КонецВставки\n"
+            "\tБ = 2;\n"
+            "КонецПроцедуры\n"
+        )
+        self.assertEqual(format_code(source), expected)
+
+    def test_changed_significant_tokens_fail_closed(self):
+        with mock.patch.object(
+            formatter, "_format_active_code", return_value="Сообщить(2);\n"
+        ), self.assertRaises(FormatError):
+            format_code("Сообщить(1);\n")
 
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"

@@ -1,6 +1,6 @@
 import unittest
 
-from bslfmt.lexer import LexerError, lex, restore
+from bslfmt.lexer import LexerError, _split_lines, lex, restore
 
 
 class LexerTests(unittest.TestCase):
@@ -116,6 +116,13 @@ class LexerTests(unittest.TestCase):
     def test_unterminated_string_fails_closed(self):
         with self.assertRaises(LexerError):
             lex('Текст = "без конца')
+
+    def test_split_lines_uses_only_cr_lf_and_crlf(self):
+        self.assertEqual(_split_lines(""), [])
+        self.assertEqual(
+            _split_lines("а\r\nб\rв\nг\u2028д\x85е\vж"),
+            ["а\r\n", "б\r", "в\n", "г\u2028д\x85е\vж"],
+        )
 
 
 if __name__ == "__main__":

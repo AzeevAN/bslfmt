@@ -6,7 +6,7 @@ import re
 from bisect import bisect_right
 from dataclasses import dataclass
 
-from .lexer import _active_source, _patch_regions, lex
+from .lexer import _NEWLINE, _active_source, _patch_regions, _split_lines, lex
 
 
 class FormatError(ValueError):
@@ -116,7 +116,7 @@ def _masked_code(source: str) -> tuple[str, list[tuple[int, int]], set[int]]:
                     chars[index] = " "
 
     line_starts = [0]
-    for line in source.splitlines(keepends=True):
+    for line in _split_lines(source):
         line_starts.append(line_starts[-1] + len(line))
     opaque_lines: set[int] = set()
     for start, end in opaque_ranges:
@@ -180,7 +180,7 @@ def _directive_line_starts(source: str) -> set[int]:
     """Найти начало строк директив одним проходом по исходнику."""
     starts = set()
     line_start = 0
-    for newline in re.finditer(r"\r\n|\r|\n", source):
+    for newline in _NEWLINE.finditer(source):
         if source[line_start:newline.start()].lstrip(" \t\f").startswith("#"):
             starts.add(line_start)
         line_start = newline.end()
@@ -316,8 +316,8 @@ def _scan_brackets(code: str, brackets: list[str]) -> None:
 def _format_active_code(source: str) -> str:
     """Выравнять только отступы распознанных блоков; при сомнении отказать."""
     masked, strings, opaque_lines = _masked_code(source)
-    lines = source.splitlines(keepends=True)
-    code_lines = masked.splitlines(keepends=True)
+    lines = _split_lines(source)
+    code_lines = _split_lines(masked)
     if len(lines) != len(code_lines):
         raise FormatError("не удалось сопоставить строки")
 
@@ -674,7 +674,7 @@ def _format_active_code(source: str) -> str:
 def _protected_patch_lines(source: str) -> set[int]:
     """Вернуть номера строк patch-областей, которые printer не меняет."""
     line_starts = [0]
-    for line in source.splitlines(keepends=True):
+    for line in _split_lines(source):
         line_starts.append(line_starts[-1] + len(line))
 
     protected: set[int] = set()
@@ -685,19 +685,35 @@ def _protected_patch_lines(source: str) -> set[int]:
     return protected
 
 
+def _significant_tokens(source: str) -> list[tuple[str, str]]:
+    return [
+        (token.kind, token.text)
+        for token in lex(source)
+        if token.kind not in {"whitespace", "newline"}
+    ]
+
+
 def format_code(source: str) -> str:
     """Форматировать активный BSL, оставляя области правки дословными."""
     # BOM из выгрузок 1С не входит в первую строку: иначе директива в ней
     # не распознаётся. Он возвращается в результат без изменений.
-    if source.startswith("﻿"):
-        return "﻿" + format_code(source[1:])
+    if source.startswith("\ufeff"):
+        return "\ufeff" + format_code(source[1:])
+    result = _format_with_patches(source)
+    # Последний рубеж: форматтер меняет только пробелы и переводы строк.
+    if _significant_tokens(result) != _significant_tokens(source):
+        raise FormatError("форматирование изменило значимые токены")
+    return result
+
+
+def _format_with_patches(source: str) -> str:
     if not _patch_regions(source):
         return _format_active_code(source)
 
     active_source, _ = _active_source(source)
     formatted = _format_active_code(active_source)
-    source_lines = source.splitlines(keepends=True)
-    formatted_lines = formatted.splitlines(keepends=True)
+    source_lines = _split_lines(source)
+    formatted_lines = _split_lines(formatted)
     if len(source_lines) != len(formatted_lines):
         raise FormatError("форматирование изменило границы строк")
 
