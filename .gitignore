@@ -17,9 +17,20 @@
 *.dt
 *.epf
 *.zip
-/data/
-/corpus/
-/incoming/
+*.1cd
+*.cfu
+*.erf
+*.mxl
+*.lgf
+*.lgp
+# Выгрузка конфигурации в файлы (Конфигуратор) и формат EDT.
+*.xml
+*.bin
+*.mdo
+*.form
+**/data/
+**/corpus/
+**/incoming/
 
 # Секреты и локальная конфигурация.
 .env
