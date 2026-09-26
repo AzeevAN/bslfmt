@@ -141,6 +141,45 @@ class LexerTests(unittest.TestCase):
             with self.subTest(source=source), self.assertRaises(LexerError):
                 lex(source)
 
+    def test_string_split_by_patch_alternatives_is_resumed(self):
+        source = (
+            'Текст = "ВЫБРАТЬ\n'
+            "#Удаление\n"
+            "|  А\n"
+            "#КонецУдаления\n"
+            "#Вставка\n"
+            "|  Б\n"
+            "#КонецВставки\n"
+            '|  ИЗ Т";\n'
+            "Д = '20200101';\n"
+        )
+        tokens = lex(source)
+        self.assertEqual(restore(tokens), source)
+        self.assertEqual(
+            [(t.kind, t.text) for t in tokens if t.kind not in {"whitespace", "newline"}],
+            [
+                ("code", "Текст"),
+                ("operator", "="),
+                ("string", '"ВЫБРАТЬ\n'),
+                ("opaque", "#Удаление\n|  А\n#КонецУдаления\n"),
+                ("opaque", "#Вставка\n|  Б\n#КонецВставки\n"),
+                ("string", '|  ИЗ Т"'),
+                ("code", ";"),
+                ("code", "Д"),
+                ("operator", "="),
+                ("date", "'20200101'"),
+                ("code", ";"),
+            ],
+        )
+        resumed = [t for t in tokens if t.text == '|  ИЗ Т"'][0]
+        self.assertEqual((resumed.line, resumed.column, resumed.start), (8, 1, source.index("|  ИЗ")))
+
+    def test_leading_byte_order_mark_is_whitespace(self):
+        self.assertEqual(
+            [(t.kind, t.text) for t in lex("\ufeff\tА")],
+            [("whitespace", "\ufeff"), ("whitespace", "\t"), ("code", "А")],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

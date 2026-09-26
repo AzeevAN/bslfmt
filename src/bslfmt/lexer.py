@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from bisect import bisect_right
 from dataclasses import dataclass
 
 
@@ -187,38 +188,75 @@ def lex(source: str) -> list[Token]:
     Это намеренно не полный синтаксический лексер: на первом шаге важнее
     безопасно отделить строки и комментарии от кода. Полная разбивка кода на
     идентификаторы и операторы появится после фиксации правил на корпусе.
-    """
 
+    Области правки расширения (#Вставка/#Удаление) — токены вида "opaque" с
+    исходным текстом. Остальной текст разбирается по виду кода расширения:
+    в сыром тексте видны обе альтернативы, и строка запроса, разделённая
+    ими, иначе не согласуется. Строка, проходящая сквозь область, делится на
+    части вида "string" до и после неё.
+    """
+    regions = _patch_regions(source)
+    if not regions:
+        return _lex_text(source)
+    active, _ = _active_source(source)
+    spans = [(region.start, region.end) for region in regions]
+    line_starts = [0]
+    for line in _split_lines(source):
+        line_starts.append(line_starts[-1] + len(line))
+
+    def piece(kind: str, start: int, end: int) -> Token:
+        line_index = bisect_right(line_starts, start) - 1
+        return Token(kind, source[start:end], start, end,
+                     line_index + 1, start - line_starts[line_index] + 1)
+
+    tokens: list[Token] = []
+    span_index = 0
+    for token in _lex_text(active):
+        position = token.start
+        while position < token.end:
+            while span_index < len(spans) and spans[span_index][1] <= position:
+                span_index += 1
+            if span_index < len(spans) and spans[span_index][0] <= position:
+                start, end = spans[span_index]
+                if not tokens or tokens[-1].start != start:
+                    tokens.append(piece("opaque", start, end))
+                position = end
+                continue
+            end = token.end
+            if span_index < len(spans):
+                end = min(end, spans[span_index][0])
+            if position == token.start and end == token.end:
+                tokens.append(Token(token.kind, source[position:end], position, end,
+                                    token.line, token.column))
+            else:
+                tokens.append(piece(token.kind, position, end))
+            position = end
+    return tokens
+
+
+def _lex_text(source: str) -> list[Token]:
+    """Лексер одного согласованного текста без областей правки."""
     tokens: list[Token] = []
     index = 0
     line = 1
     column = 1
     length = len(source)
-    patch_regions = _patch_regions(source)
-    patch_by_start = {region.start: region.end for region in patch_regions}
 
     def add(kind: str, start: int, start_line: int, start_column: int) -> None:
         tokens.append(Token(kind, source[start:index], start, index,
                             start_line, start_column))
+
+    if source.startswith("\ufeff"):
+        # BOM — не часть первого слова: отдельный пробельный токен.
+        index = column = 1
+        column += 1
+        add("whitespace", 0, 1, 1)
 
     while index < length:
         start = index
         start_line = line
         start_column = column
         current = source[index]
-
-        if index in patch_by_start:
-            end = patch_by_start[index]
-            text = source[index:end]
-            newlines = list(_NEWLINE.finditer(text))
-            if newlines:
-                line += len(newlines)
-                column = len(text) - newlines[-1].end() + 1
-            else:
-                column += len(text)
-            index = end
-            add("opaque", start, start_line, start_column)
-            continue
 
         if current in " \t\f":
             index += 1
@@ -282,10 +320,6 @@ def lex(source: str) -> list[Token]:
                         index += 1
                     line += 1
                     column = 1
-                    if index in patch_by_start:
-                        # Альтернативный фрагмент — отдельная область текста.
-                        # Текущая строка может намеренно не закрывать литерал.
-                        break
                     # В многострочном литерале отдельная BSL-строка-комментарий
                     # может стоять между строками-продолжениями с '|'. Кавычки
                     # в ней не закрывают литерал; сам фрагмент остаётся защищённым.
@@ -302,7 +336,7 @@ def lex(source: str) -> list[Token]:
                     continue
                 index += 1
                 column += 1
-            if not closed and index not in patch_by_start:
+            if not closed:
                 raise LexerError(
                     f"незакрытая строка в строке {start_line}, колонке {start_column}",
                     start_line,
