@@ -40,6 +40,8 @@ DEFAULT_MAX_DEPTH = 100
 
 
 _IDENTIFIER = re.compile(r"[A-Za-zА-Яа-яЁё_][A-Za-zА-Яа-яЁё0-9_]*")
+_NOT_NEWLINE = re.compile(r"[^\r\n]")
+_MASKED_KINDS = frozenset({"string", "date", "comment", "opaque"})
 _OPEN = {
     "Процедура": "КонецПроцедуры",
     "Функция": "КонецФункции",
@@ -143,28 +145,30 @@ _CONDITIONAL_DIRECTIVES = {
 
 
 def _masked_code(
-    source: str,
+    source: str, tokens: list | None = None,
 ) -> tuple[str, list[tuple[int, int]], list[int], set[int]]:
     """Скрыть литералы, комментарии и непрозрачные области без сдвига координат.
 
     Возвращает также диапазоны строк (для многострочных литералов) и начала
-    всех литералов, включая даты, в порядке появления.
+    всех литералов, включая даты, в порядке появления. tokens — готовый
+    результат lex(source), если он уже есть.
     """
-    chars = list(source)
+    parts = []
     strings = []
     literal_starts = []
     opaque_ranges = []
-    for token in lex(source):
-        if token.kind == "string":
+    for token in lex(source) if tokens is None else tokens:
+        kind = token.kind
+        if kind == "string":
             strings.append((token.start, token.end))
-        if token.kind in {"string", "date"}:
+        if kind == "string" or kind == "date":
             literal_starts.append(token.start)
-        if token.kind == "opaque":
+        if kind == "opaque":
             opaque_ranges.append((token.start, token.end))
-        if token.kind in {"string", "date", "comment", "opaque"}:
-            for index in range(token.start, token.end):
-                if chars[index] not in "\r\n":
-                    chars[index] = " "
+        if kind in _MASKED_KINDS:
+            parts.append(_NOT_NEWLINE.sub(" ", token.text))
+        else:
+            parts.append(token.text)
 
     line_starts = [0]
     for line in _split_lines(source):
@@ -174,7 +178,7 @@ def _masked_code(
         first_line = bisect_right(line_starts, start) - 1
         last_line = bisect_right(line_starts, max(start, end - 1)) - 1
         opaque_lines.update(range(first_line, last_line + 1))
-    return "".join(chars), strings, literal_starts, opaque_lines
+    return "".join(parts), strings, literal_starts, opaque_lines
 
 
 def _significant_neighbor(tokens, index: int, direction: int) -> int | None:

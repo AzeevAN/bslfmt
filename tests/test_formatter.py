@@ -823,6 +823,14 @@ class FormatterTests(unittest.TestCase):
         self.assertEqual(format_code(source), expected)
         self.assertEqual(format_code(expected), expected)
 
+    def test_patch_region_is_found_in_cr_only_file(self):
+        source = "Процедура П()\r#Вставка\r   Х=1;\r#КонецВставки\rА=1;\rКонецПроцедуры\r"
+        expected = "Процедура П()\r#Вставка\r   Х=1;\r#КонецВставки\r\tА = 1;\rКонецПроцедуры\r"
+        self.assertEqual(format_code(source), expected)
+        self.assertEqual(
+            [t.kind for t in lex(source) if t.kind == "opaque"], ["opaque"]
+        )
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(

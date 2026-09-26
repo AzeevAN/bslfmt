@@ -49,6 +49,10 @@ _PATCH_CLOSE = {
 }
 _DIRECTIVE = re.compile(r"[ \t\f]*#[ \t\f]*([A-Za-zА-Яа-яЁё]*)")
 _NEWLINE = re.compile(r"\r\n|\r|\n")
+# Быстрая проверка: встречается ли где-нибудь имя директивы расширения.
+# Начало строки не проверяется: условие с якорем в разы медленнее, а лишнее
+# совпадение (в строке, комментарии) лишь ведёт к полному поиску по строкам.
+_PATCH_HINT = re.compile(r"#[ \t\f]*(?:вставка|удаление|insert|delete)", re.IGNORECASE)
 
 
 def _directive_name(line: str) -> str | None:
@@ -95,6 +99,8 @@ def _patch_regions(source: str) -> list[PatchRegion]:
     остаток файла, чтобы её содержимое не смешивалось с активным кодом
     (closed=False). Форматтер на такой области отказывает.
     """
+    if not _PATCH_HINT.search(source):
+        return []
     lines: list[tuple[int, int, int, str]] = []
     offset = 0
     for match in _NEWLINE.finditer(source):
