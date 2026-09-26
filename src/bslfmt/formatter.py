@@ -266,81 +266,48 @@ def _directive_line_starts(source: str) -> set[int]:
     return starts
 
 
-def _space_binary_operators(source: str) -> str:
-    """Нормализовать бинарные операторы вне строк, комментариев и директив."""
+def _is_binary_operator(tokens, index: int) -> bool:
+    previous = _significant_neighbor(tokens, index, -1)
+    following = _significant_neighbor(tokens, index, 1)
+    return (
+        previous is not None
+        and following is not None
+        and _ends_operand(tokens[previous])
+        and _starts_operand(tokens, following)
+    )
+
+
+def _normalize_spacing(source: str) -> str:
+    """Нормализовать пробелы в коде вне строк, комментариев и директив.
+
+    Бинарный оператор получает по пробелу с каждой стороны, лишние пробелы
+    схлопываются в один, хвостовые убираются, отступы сохраняются. Оба
+    правила — за один разбор: вставленные у оператора пробелы не соседствуют
+    с другими пробелами и не бывают отступом.
+    """
     tokens = lex(source)
     directive_lines = _directive_line_starts(source)
     line_starts, indented = _line_context(tokens)
-    binary: set[int] = set()
+    last = len(tokens) - 1
+    output: list[str] = []
     for index, token in enumerate(tokens):
-        if token.kind != "operator":
+        kind = token.kind
+        on_directive = line_starts[index] in directive_lines
+        if kind == "whitespace":
+            if on_directive or indented[index]:
+                output.append(token.text)
+            elif index < last and tokens[index + 1].kind != "newline":
+                output.append(" ")
             continue
-        if line_starts[index] in directive_lines:
+        if kind == "operator" and not on_directive and _is_binary_operator(tokens, index):
+            if index and tokens[index - 1].kind not in {"whitespace", "newline", "comment"}:
+                output.append(" ")
+            output.append(token.text)
+            if index < last and tokens[index + 1].kind not in {"whitespace", "newline"}:
+                output.append(" ")
             continue
-        previous = _significant_neighbor(tokens, index, -1)
-        following = _significant_neighbor(tokens, index, 1)
-        if (
-            previous is not None
-            and following is not None
-            and _ends_operand(tokens[previous])
-            and _starts_operand(tokens, following)
-        ):
-            binary.add(index)
-
-    if not binary:
-        return source
-
-    replacements: dict[int, str] = {}
-    insert_before: set[int] = set()
-    insert_after: set[int] = set()
-    for index in binary:
-        if index > 0:
-            previous = tokens[index - 1]
-            if previous.kind == "whitespace":
-                if "\n" not in previous.text and "\r" not in previous.text:
-                    if not indented[index - 1]:
-                        replacements[index - 1] = " "
-            elif previous.kind not in {"newline", "comment"}:
-                insert_before.add(index)
-        if index + 1 < len(tokens):
-            following = tokens[index + 1]
-            if following.kind == "whitespace":
-                if "\n" not in following.text and "\r" not in following.text:
-                    replacements[index + 1] = " "
-            elif following.kind not in {"newline"}:
-                insert_after.add(index)
-
-    output = []
-    for index, token in enumerate(tokens):
-        if index in insert_before:
-            output.append(" ")
-        output.append(replacements.get(index, token.text))
-        if index in insert_after:
-            output.append(" ")
+        output.append(token.text)
     return "".join(output)
-
-
-def _normalize_horizontal_whitespace(source: str) -> str:
-    """Схлопнуть лишние пробелы в коде, сохранив отступы и защищённый текст."""
-    tokens = lex(source)
-    directive_lines = _directive_line_starts(source)
-    line_starts, indented = _line_context(tokens)
-    replacements: dict[int, str] = {}
-    for index, token in enumerate(tokens):
-        if token.kind != "whitespace":
-            continue
-        if line_starts[index] in directive_lines:
-            continue
-        if indented[index]:
-            continue
-        following = tokens[index + 1] if index + 1 < len(tokens) else None
-        # Не оставлять хвостовые пробелы после кода; пробелы внутри строки
-        # комментария уже входят в отдельный comment-токен и сюда не попадают.
-        replacement = "" if following is None or following.kind == "newline" else " "
-        if token.text != replacement:
-            replacements[index] = replacement
-    return "".join(replacements.get(index, token.text)
-                   for index, token in enumerate(tokens))
 
 
 def _line_keywords(code: str) -> list[tuple[str, int]]:
@@ -520,8 +487,7 @@ class _LineFormatter:
             else:
                 self._statement_line(line, code, number)
         self._finish()
-        spaced = _space_binary_operators("".join(self.result))
-        return _normalize_horizontal_whitespace(spaced)
+        return _normalize_spacing("".join(self.result))
 
     # Состояние
 

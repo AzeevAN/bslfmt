@@ -831,6 +831,22 @@ class FormatterTests(unittest.TestCase):
             [t.kind for t in lex(source) if t.kind == "opaque"], ["opaque"]
         )
 
+    def test_spacing_rules_in_one_pass(self):
+        cases = (
+            ("А=Б+//комментарий\n", "А = Б+//комментарий\n"),
+            ("А = Б +   \nВ;\n", "А = Б +\nВ;\n"),
+            ("А=-1;Б=В*-Г;\n", "А = -1;Б = В * -Г;\n"),
+            ("\tА  =  Б<>В   ;  // хвост  \n", "\tА = Б <> В ; // хвост  \n"),
+            ("#Если Сервер Тогда\nА=Б+В;\n#КонецЕсли\n",
+             "#Если Сервер Тогда\nА = Б + В;\n#КонецЕсли\n"),
+            ('С = "а"+"б";\nД=\'20200101\'+1;\n',
+             'С = "а" + "б";\nД = \'20200101\' + 1;\n'),
+            ("Ф(А,Б) - (В) * Г/Д;\n", "Ф(А,Б) - (В) * Г / Д;\n"),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(formatter._normalize_spacing(source), expected)
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(
