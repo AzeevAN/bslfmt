@@ -1,12 +1,14 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "bslfmt"
-version = "0.1.0"
+version = "0.1.1"
 description = "Детерминированный форматтер структурных отступов BSL"
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.10"
 dependencies = []
 classifiers = [
