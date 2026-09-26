@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 
 from .lexer import _NEWLINE, _active_source, _patch_regions, _split_lines, lex
@@ -176,9 +176,28 @@ def _starts_operand(tokens, index: int) -> bool:
     return bool(text) and (text[0].isalnum() or text[0] in "_([{")
 
 
-def _is_line_indent(source: str, token) -> bool:
-    line_start = max(source.rfind("\n", 0, token.start), source.rfind("\r", 0, token.start)) + 1
-    return not source[line_start:token.start].strip(" \t\f")
+def _line_context(tokens) -> tuple[list[int], list[bool]]:
+    """Для каждого токена найти начало его строки и признак отступа.
+
+    Признак истинен, если от начала строки до токена только пробелы. Один
+    проход по токенам: поиск назад по исходнику для каждого токена давал
+    квадратичное время на больших модулях.
+    """
+    line_starts: list[int] = []
+    indented: list[bool] = []
+    line_start = 0
+    blank = True
+    for token in tokens:
+        line_starts.append(line_start)
+        indented.append(blank)
+        text = token.text
+        newline = max(text.rfind("\n"), text.rfind("\r"))
+        if newline >= 0:
+            line_start = token.start + newline + 1
+            blank = not text[newline + 1:].strip(" \t\f")
+        elif token.kind != "whitespace":
+            blank = False
+    return line_starts, indented
 
 
 def _directive_line_starts(source: str) -> set[int]:
@@ -198,12 +217,12 @@ def _space_binary_operators(source: str) -> str:
     """Нормализовать бинарные операторы вне строк, комментариев и директив."""
     tokens = lex(source)
     directive_lines = _directive_line_starts(source)
+    line_starts, indented = _line_context(tokens)
     binary: set[int] = set()
     for index, token in enumerate(tokens):
         if token.kind != "operator":
             continue
-        line_start = max(source.rfind("\n", 0, token.start), source.rfind("\r", 0, token.start)) + 1
-        if line_start in directive_lines:
+        if line_starts[index] in directive_lines:
             continue
         previous = _significant_neighbor(tokens, index, -1)
         following = _significant_neighbor(tokens, index, 1)
@@ -226,7 +245,7 @@ def _space_binary_operators(source: str) -> str:
             previous = tokens[index - 1]
             if previous.kind == "whitespace":
                 if "\n" not in previous.text and "\r" not in previous.text:
-                    if not _is_line_indent(source, previous):
+                    if not indented[index - 1]:
                         replacements[index - 1] = " "
             elif previous.kind not in {"newline", "comment"}:
                 insert_before.add(index)
@@ -252,14 +271,14 @@ def _normalize_horizontal_whitespace(source: str) -> str:
     """Схлопнуть лишние пробелы в коде, сохранив отступы и защищённый текст."""
     tokens = lex(source)
     directive_lines = _directive_line_starts(source)
+    line_starts, indented = _line_context(tokens)
     replacements: dict[int, str] = {}
     for index, token in enumerate(tokens):
         if token.kind != "whitespace":
             continue
-        line_start = max(source.rfind("\n", 0, token.start), source.rfind("\r", 0, token.start)) + 1
-        if line_start in directive_lines:
+        if line_starts[index] in directive_lines:
             continue
-        if _is_line_indent(source, token):
+        if indented[index]:
             continue
         following = tokens[index + 1] if index + 1 < len(tokens) else None
         # Не оставлять хвостовые пробелы после кода; пробелы внутри строки
@@ -321,6 +340,11 @@ def _scan_brackets(code: str, brackets: list[str]) -> None:
 def _format_active_code(source: str) -> str:
     """Выравнять только отступы распознанных блоков; при сомнении отказать."""
     masked, strings, opaque_lines = _masked_code(source)
+    string_starts = [start for start, _ in strings]
+
+    def string_starts_between(start: int, end: int) -> bool:
+        position = bisect_left(string_starts, start)
+        return position < len(string_starts) and string_starts[position] < end
     lines = _split_lines(source)
     code_lines = _split_lines(masked)
     if len(lines) != len(code_lines):
@@ -431,10 +455,7 @@ def _format_active_code(source: str) -> str:
             string_follows = False
             if trailing_operator:
                 operator_position = line_start + suffix_start + trailing_operator.start()
-                string_follows = any(
-                    operator_position <= start < offset
-                    for start, _ in strings
-                )
+                string_follows = string_starts_between(operator_position, offset)
             operator_continuation = bool(trailing_operator) and not string_follows
             if brackets or operator_continuation:
                 if continuation_depth is None:
@@ -572,9 +593,8 @@ def _format_active_code(source: str) -> str:
             trailing_operator = None
         if trailing_operator:
             line_start = offset - len(line)
-            string_follows = any(
-                line_start + trailing_operator.start() <= start < offset
-                for start, _ in strings
+            string_follows = string_starts_between(
+                line_start + trailing_operator.start(), offset
             )
             if string_follows:
                 trailing_operator = None

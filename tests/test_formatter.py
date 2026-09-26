@@ -572,6 +572,27 @@ class FormatterTests(unittest.TestCase):
         self.assertEqual(format_code("А = Б-В;\n"), "А = Б - В;\n")
         self.assertEqual(format_code("Возврат -В;\n"), "Возврат -В;\n")
 
+    def test_large_inputs_are_formatted_in_linear_time(self):
+        # Поиск начала строки через rfind и перебор всех литералов давали
+        # квадратичное время: модуль 1,3 МБ — 57 с, строка 172 КБ — 12 с.
+        body = (
+            "Процедура П{0}()\n"
+            "Если А > 0 Тогда\n"
+            'Сумма = Сумма + А * 2; // пояснение\n'
+            "КонецЕсли;\n"
+            "КонецПроцедуры\n"
+        )
+        cases = {
+            "module": "".join(body.format(number) for number in range(20_000)),
+            "one_line": "Ф = Ф + 1; " * 50_000,
+            "string_chain": 'Т = ""' + ' +\n"ю"' * 50_000 + ";\n",
+        }
+        for name, source in cases.items():
+            with self.subTest(case=name):
+                started = time.perf_counter()
+                format_code(source)
+                self.assertLess(time.perf_counter() - started, 10)
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(
