@@ -10,7 +10,7 @@ from io import StringIO
 from pathlib import Path
 from unittest import mock
 
-from bslfmt import FormatError, LexerError, format_code, formatter, lex
+from bslfmt import FormatError, LexerError, format_code, formatter, lex, restore
 from bslfmt.__main__ import main
 
 
@@ -764,6 +764,32 @@ class FormatterTests(unittest.TestCase):
     def test_many_leading_byte_order_marks_do_not_recurse(self):
         source = "\ufeff" * 5000 + "А=1;\n"
         self.assertEqual(format_code(source), "\ufeff" * 5000 + "А = 1;\n")
+
+    def test_unclosed_patch_region_fails_closed(self):
+        cases = (
+            ("Процедура П()\n#Вставка\nА=1;\nКонецПроцедуры\n", 2, "#Вставка"),
+            ("А=1;\n#Delete\nБ=2;\n", 2, "#Удаление"),
+            ("А=1;\n#Вставка\n#Удаление\nБ=2;\n#КонецВставки\n", 2, "#Вставка"),
+            (
+                "Процедура П()\n"
+                'Текст = "первая строка\n'
+                "#Вставка это не текст запроса: строки литерала начинаются с |\n"
+                '|вторая строка";\n'
+                "Сообщить(2);\n"
+                "КонецПроцедуры\n",
+                3,
+                "#Вставка",
+            ),
+        )
+        for source, line, text in cases:
+            with self.subTest(source=source):
+                self.assertEqual(restore(lex(source)), source)
+                with self.assertRaises(FormatError) as caught:
+                    format_code(source)
+                self.assertEqual(caught.exception.line, line)
+                self.assertIn(text, str(caught.exception))
+        source = 'Текст = "первая\n|#Вставка это текст запроса\n|вторая";\n'
+        self.assertEqual(format_code(source), source)
 
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"

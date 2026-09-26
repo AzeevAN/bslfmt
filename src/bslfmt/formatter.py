@@ -857,8 +857,18 @@ def format_code(
 
 
 def _format_with_patches(source: str, max_depth: int | None) -> str:
-    if not _patch_regions(source):
+    regions = _patch_regions(source)
+    if not regions:
         return _format_active_code(source, max_depth)
+    for region in regions:
+        if not region.closed:
+            # Лексер отдаёт незакрытой области остаток файла, чтобы её текст не
+            # смешивался с кодом; форматировать такой файл — значит молча
+            # пропустить весь хвост.
+            raise FormatError(
+                f"незакрытая область #{region.kind.capitalize()}",
+                len(_split_lines(source[:region.start])) + 1,
+            )
 
     active_source, _ = _active_source(source)
     formatted = _format_active_code(active_source, max_depth)

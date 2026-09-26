@@ -83,6 +83,7 @@ class PatchRegion:
     end: int
     opening_end: int
     closing_start: int
+    closed: bool = True
 
 
 def _patch_regions(source: str) -> list[PatchRegion]:
@@ -90,7 +91,8 @@ def _patch_regions(source: str) -> list[PatchRegion]:
 
     Текст областей используется как контекст правки, а не как отдельный
     BSL-модуль. Неизвестные маркеры игнорируются; незакрытая область занимает
-    остаток файла, чтобы её содержимое не смешивалось с активным кодом.
+    остаток файла, чтобы её содержимое не смешивалось с активным кодом
+    (closed=False). Форматтер на такой области отказывает.
     """
     lines: list[tuple[int, int, int, str]] = []
     offset = 0
@@ -136,6 +138,7 @@ def _patch_regions(source: str) -> list[PatchRegion]:
             end=lines[end_line][2],
             opening_end=lines[index][2],
             closing_start=closing_start,
+            closed=not closers,
         ))
         index = end_line + 1
     return regions
