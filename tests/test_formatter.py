@@ -847,6 +847,20 @@ class FormatterTests(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertEqual(formatter._normalize_spacing(source), expected)
 
+    def test_source_is_lexed_once_without_patch_regions(self):
+        source = "Процедура П()\nА=1;\nКонецПроцедуры\n"
+        calls = []
+        original = formatter.lex
+
+        def counting_lex(text):
+            calls.append(text)
+            return original(text)
+
+        with mock.patch.object(formatter, "lex", counting_lex):
+            self.assertEqual(format_code(source), "Процедура П()\n\tА = 1;\nКонецПроцедуры\n")
+        self.assertEqual(calls.count(source), 1)
+        self.assertEqual(len(calls), 3)
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(

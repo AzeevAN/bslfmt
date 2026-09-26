@@ -362,11 +362,11 @@ class _Position:
     line: int | None = None
 
 
-def _format_active_code(source: str, max_depth: int | None) -> str:
+def _format_active_code(source: str, max_depth: int | None, tokens=None) -> str:
     """Выравнять только отступы распознанных блоков; при сомнении отказать."""
     cursor = _Position()
     try:
-        return _LineFormatter(source, max_depth, cursor).run()
+        return _LineFormatter(source, max_depth, cursor, tokens).run()
     except FormatError as error:
         if error.line is None and cursor.line is not None:
             raise FormatError(error.message, cursor.line) from None
@@ -445,8 +445,10 @@ def _reindent(line: str, depth: int) -> str:
 class _LineFormatter:
     """Построчный автомат отступов: состояние блоков, скобок и продолжений."""
 
-    def __init__(self, source: str, max_depth: int | None, cursor: _Position) -> None:
-        masked, self.strings, self.literal_starts, self.opaque_lines = _masked_code(source)
+    def __init__(
+        self, source: str, max_depth: int | None, cursor: _Position, tokens=None,
+    ) -> None:
+        masked, self.strings, self.literal_starts, self.opaque_lines = _masked_code(source, tokens)
         self.lines = _split_lines(source)
         self.code_lines = _split_lines(masked)
         if len(self.lines) != len(self.code_lines):
@@ -794,7 +796,7 @@ def _significant_tokens(source: str) -> list:
     ]
 
 
-def _check_significant_tokens(source: str, result: str) -> None:
+def _check_significant_tokens(source: str, result: str, tokens=None) -> None:
     """Последний рубеж: форматтер меняет только пробелы и переводы строк.
 
     Сравнение идёт по каждому виду кода: при правках расширения — отдельно
@@ -802,6 +804,7 @@ def _check_significant_tokens(source: str, result: str) -> None:
     правки — контекст, а не обязательно корректный BSL: если исходный вид
     конфигурации не разбирается, сравнивать в нём нечего (сами области
     копируются дословно), а вид кода расширения проверяется всегда.
+    tokens — готовый результат lex(source) для текста без областей правки.
     """
     before_views = _code_views(source)
     after_views = _code_views(result)
@@ -809,7 +812,10 @@ def _check_significant_tokens(source: str, result: str) -> None:
         raise FormatError("форматирование изменило области расширения")
     for number, (before_view, after_view) in enumerate(zip(before_views, after_views)):
         try:
-            before = _significant_tokens(before_view)
+            if tokens is not None and len(before_views) == 1:
+                before = [t for t in tokens if t.kind not in {"whitespace", "newline"}]
+            else:
+                before = _significant_tokens(before_view)
         except LexerError:
             if number == 0:
                 raise
@@ -840,15 +846,18 @@ def format_code(
     # возвращаются в результат без изменений.
     body = source.lstrip("\ufeff")
     bom = source[:len(source) - len(body)]
-    result = _format_with_patches(body, max_depth)
-    _check_significant_tokens(body, result)
+    # Без областей расширения токены исходника нужны дважды — в форматировании
+    # и в итоговой проверке; разбираем один раз.
+    tokens = None if _patch_regions(body) else lex(body)
+    result = _format_with_patches(body, max_depth, tokens)
+    _check_significant_tokens(body, result, tokens)
     return bom + result
 
 
-def _format_with_patches(source: str, max_depth: int | None) -> str:
+def _format_with_patches(source: str, max_depth: int | None, tokens=None) -> str:
     regions = _patch_regions(source)
     if not regions:
-        return _format_active_code(source, max_depth)
+        return _format_active_code(source, max_depth, tokens)
     for region in regions:
         if not region.closed:
             # Лексер отдаёт незакрытой области остаток файла, чтобы её текст не
