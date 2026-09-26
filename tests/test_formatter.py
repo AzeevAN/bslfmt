@@ -1038,6 +1038,71 @@ class FormatterTests(unittest.TestCase):
                 self.assertEqual(format_code(source), expected)
                 self.assertEqual(format_code(expected), expected)
 
+    def test_strip_body_comments_removes_comment_lines_inside_methods(self):
+        source = (
+            "// Описание процедуры\n"
+            "&НаСервере\n"
+            "Процедура П() // хвост объявления\n"
+            "//++ Иванов\n"
+            "\t// Старый = 1;\n"
+            "А = 1; // пояснение остаётся\n"
+            "\n"
+            "  // мёртвый код\n"
+            "\n"
+            "Т = \"ВЫБРАТЬ\n"
+            "|//\tкомментарий запроса — часть строки\n"
+            "|Т.А\";\n"
+            "//--\n"
+            "КонецПроцедуры\n"
+            "// После процедуры\n"
+            "Function F()\n"
+            "// inner\n"
+            "Return 1;\n"
+            "EndFunction\n"
+        )
+        expected = (
+            "// Описание процедуры\n"
+            "&НаСервере\n"
+            "Процедура П() // хвост объявления\n"
+            "\tА = 1; // пояснение остаётся\n"
+            "\n"
+            "\tТ = \"ВЫБРАТЬ\n"
+            "\t|//\tкомментарий запроса — часть строки\n"
+            "\t|Т.А\";\n"
+            "КонецПроцедуры\n"
+            "// После процедуры\n"
+            "Function F()\n"
+            "\tReturn 1;\n"
+            "EndFunction\n"
+        )
+        self.assertEqual(format_code(source, strip_body_comments=True), expected)
+        self.assertEqual(format_code(expected, strip_body_comments=True), expected)
+        # без ключа — комментарии на месте
+        self.assertIn("//++ Иванов", format_code(source))
+
+    def test_strip_body_comments_keeps_patch_regions_verbatim(self):
+        source = (
+            "Процедура П()\n"
+            "// снаружи области — удаляется\n"
+            "#Вставка\n"
+            "// внутри области — остаётся\n"
+            "Х = 1;\n"
+            "#КонецВставки\n"
+            "А = 1;\n"
+            "КонецПроцедуры\n"
+        )
+        expected = (
+            "Процедура П()\n"
+            "#Вставка\n"
+            "// внутри области — остаётся\n"
+            "Х = 1;\n"
+            "#КонецВставки\n"
+            "\tА = 1;\n"
+            "КонецПроцедуры\n"
+        )
+        self.assertEqual(format_code(source, strip_body_comments=True), expected)
+        self.assertEqual(format_code(expected, strip_body_comments=True), expected)
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(

@@ -42,6 +42,14 @@ HELP = """\
                   существующий файл не перезаписывается).
                   Пример: bslfmt Модуль.bsl --output Модуль.новый.bsl
   --version       показать версию.
+
+Дополнительно (с любым режимом):
+  --strip-body-comments
+                  удалить строки-комментарии внутри процедур и функций
+                  (включая закомментированный код и маркеры доработок).
+                  Комментарии в конце строки кода, над методами, внутри
+                  строк и областей #Вставка/#Удаление остаются.
+                  Пример: bslfmt -i --strip-body-comments Модуль.bsl
   -h, --help      показать эту справку.
 
 Несколько файлов — только с -i, --check или --diff; каждый обрабатывается
@@ -191,6 +199,7 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--diff", action="store_true")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--strip-body-comments", action="store_true")
     # «--» завершает флаги: хвост — только файлы. Разбираем сами:
     # parse_intermixed_args до Python 3.13 не понимает «--».
     arguments = list(sys.argv[1:] if argv is None else argv)
@@ -218,7 +227,7 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
 
 def _process(name: str, args: argparse.Namespace) -> int:
     source = _read(name)
-    formatted = format_code(source)
+    formatted = format_code(source, strip_body_comments=args.strip_body_comments)
     if args.in_place:
         if formatted == source:
             _write(sys.stdout, f"{name}: без изменений\n")

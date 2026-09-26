@@ -130,6 +130,13 @@ class CliTests(unittest.TestCase):
         self.assertEqual(run(["-i", "--", "-минус.bsl"])[0], 0)
         self.assertEqual(path.read_text(encoding="utf-8"), FORMATTED)
 
+    def test_strip_body_comments_flag(self):
+        path = self.write("м.bsl", "Процедура П()\n// мёртвый\nА=1;\nКонецПроцедуры\n")
+        self.assertEqual(run(["--check", "--strip-body-comments", str(path)])[0], 1)
+        self.assertEqual(run(["-i", "--strip-body-comments", str(path)])[0], 0)
+        self.assertEqual(path.read_text(encoding="utf-8"), "Процедура П()\n\tА = 1;\nКонецПроцедуры\n")
+        self.assertIn("--strip-body-comments", run(["--help"])[1])
+
     def test_check_reports_without_writing(self):
         changed = self.write("а.bsl", UNFORMATTED)
         same = self.write("б.bsl", FORMATTED)

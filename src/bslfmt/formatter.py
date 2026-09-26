@@ -410,11 +410,14 @@ class _Position:
 
 def _format_active_code(
     source: str, max_depth: int | None, tokens=None, collapse_blank_lines: bool = False,
+    stripped: set[int] | None = None, keep_line_count: bool = False,
 ) -> str:
     """Выравнять только отступы распознанных блоков; при сомнении отказать."""
     cursor = _Position()
     try:
-        return _LineFormatter(source, max_depth, cursor, tokens).run(collapse_blank_lines)
+        return _LineFormatter(
+            source, max_depth, cursor, tokens, stripped, keep_line_count
+        ).run(collapse_blank_lines)
     except FormatError as error:
         if error.line is None and cursor.line is not None:
             raise FormatError(error.message, cursor.line) from None
@@ -546,7 +549,13 @@ class _LineFormatter:
 
     def __init__(
         self, source: str, max_depth: int | None, cursor: _Position, tokens=None,
+        stripped: set[int] | None = None, keep_line_count: bool = False,
     ) -> None:
+        # stripped — куда записать номера удалённых строк-комментариев (None —
+        # не удалять); keep_line_count — режим областей правки: строка остаётся
+        # до сборки, удаляется потом.
+        self.stripped = stripped
+        self.keep_line_count = keep_line_count
         masked, self.strings, self.literal_starts, self.opaque_lines = _masked_code(source, tokens)
         self.lines = _split_lines(source)
         self.code_lines = _split_lines(masked)
@@ -593,6 +602,11 @@ class _LineFormatter:
                 # следующей строки кода (std456 п.7.3). Комментарий в колонке 0
                 # остаётся там: маркеры доработок (//!, //++, //{{) и код,
                 # закомментированный конфигуратором (Ctrl+/).
+                if self.stripped is not None and self._inside_method():
+                    self.stripped.add(number + 1)
+                    if self.keep_line_count:
+                        self.result.append(line)
+                    continue
                 if not line.startswith("//"):
                     self.pending_comments.append(len(self.result))
                 self.result.append(line)
@@ -617,6 +631,9 @@ class _LineFormatter:
                 self.previous_code_end = code_tail[-1]
         self._finish()
         return _normalize_spacing("".join(self.result), collapse_blank_lines)
+
+    def _inside_method(self) -> bool:
+        return bool(self.stack) and self.stack[0].opener in {"Процедура", "Функция"}
 
     def _place_comments(self, code_line: str) -> None:
         """Поставить ждущие комментарии на отступ строки кода после них.
@@ -1027,7 +1044,9 @@ def _significant_units(rows) -> list[tuple[str, str, int]]:
     return units
 
 
-def _check_significant_tokens(source: str, result: str, tokens=None) -> None:
+def _check_significant_tokens(
+    source: str, result: str, tokens=None, stripped: set[int] | None = None,
+) -> None:
     """Последний рубеж: форматтер меняет только пробелы и переводы строк.
 
     Сравнение идёт по каждому виду кода: при правках расширения — отдельно
@@ -1051,6 +1070,12 @@ def _check_significant_tokens(source: str, result: str, tokens=None) -> None:
             if number == 0:
                 raise
             continue
+        if stripped:
+            # Удалённые по strip_body_comments строки-комментарии не ждём.
+            before_rows = [
+                row for row in before_rows
+                if not (row[_KIND] == "comment" and row[_LINE] in stripped)
+            ]
         after_rows = _token_rows(after_view)
         if _significant_signature(before_rows) == _significant_signature(after_rows):
             continue
@@ -1101,11 +1126,15 @@ def format_code(
     *,
     max_chars: int | None = DEFAULT_MAX_CHARS,
     max_depth: int | None = DEFAULT_MAX_DEPTH,
+    strip_body_comments: bool = False,
 ) -> str:
     """Форматировать активный BSL, оставляя области правки дословными.
 
     max_chars ограничивает длину исходника, max_depth — вложенность блоков;
     при превышении — FormatError. None отключает соответствующий лимит.
+    strip_body_comments — удалить строки-комментарии внутри тел процедур и
+    функций (комментарии в конце строки кода, снаружи методов, внутри строк и
+    областей #Вставка/#Удаление остаются).
     """
     if max_chars is not None and len(source) > max_chars:
         raise FormatError(f"размер исходника больше {max_chars} символов")
@@ -1117,18 +1146,24 @@ def format_code(
     # Без областей расширения токены исходника нужны дважды — в форматировании
     # и в итоговой проверке; разбираем один раз.
     tokens = None if _patch_regions(body) else _token_rows(body)
-    result = _format_with_patches(body, max_depth, tokens)
+    # Номера (с 1) удалённых строк-комментариев — их не ждёт итоговая проверка.
+    stripped: set[int] | None = set() if strip_body_comments else None
+    result = _format_with_patches(body, max_depth, tokens, stripped)
     if tokens is None:
         # Режим областей правки: число строк меняется только после сборки.
         result = _collapse_blank_lines(result)
-    _check_significant_tokens(body, result, tokens)
+    _check_significant_tokens(body, result, tokens, stripped)
     return bom + result
 
 
-def _format_with_patches(source: str, max_depth: int | None, tokens=None) -> str:
+def _format_with_patches(
+    source: str, max_depth: int | None, tokens=None, stripped: set[int] | None = None,
+) -> str:
     regions = _patch_regions(source)
     if not regions:
-        return _format_active_code(source, max_depth, tokens, collapse_blank_lines=True)
+        return _format_active_code(
+            source, max_depth, tokens, collapse_blank_lines=True, stripped=stripped
+        )
     for region in regions:
         if not region.closed:
             # Лексер отдаёт незакрытой области остаток файла, чтобы её текст не
@@ -1140,14 +1175,20 @@ def _format_with_patches(source: str, max_depth: int | None, tokens=None) -> str
             )
 
     active_source, _ = _active_source(source)
-    formatted = _format_active_code(active_source, max_depth)
+    formatted = _format_active_code(
+        active_source, max_depth, stripped=stripped, keep_line_count=True
+    )
     source_lines = _split_lines(source)
     formatted_lines = _split_lines(formatted)
     if len(source_lines) != len(formatted_lines):
         raise FormatError("форматирование изменило границы строк")
 
     protected = _protected_patch_lines(source)
+    if stripped:
+        # Строки областей правки дословны: комментарии в них не удаляются.
+        stripped.difference_update(number + 1 for number in protected)
     return "".join(
         original if number in protected else changed
         for number, (original, changed) in enumerate(zip(source_lines, formatted_lines))
+        if not stripped or number + 1 not in stripped
     )
