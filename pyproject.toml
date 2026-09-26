@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bslfmt"
+version = "0.1.0"
+description = "Детерминированный форматтер структурных отступов BSL"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development :: Code Generators",
+]
+
+[project.scripts]
+bslfmt = "bslfmt.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

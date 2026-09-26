@@ -1,0 +1,53 @@
+# Локальные инструкции, задача и исследования владельца.
+/docs/
+/AGENTS.md
+/CLAUDE.md
+/AGENT-HANDOFF.md
+/reports/
+/state/
+/format-errors-review.bsl
+/test.bsl
+/test.formatted.bsl
+
+# Настоящие выгрузки 1С и любые локальные тестовые модули.
+*.bsl
+*.hbk
+*.cf
+*.cfe
+*.dt
+*.epf
+*.zip
+/data/
+/corpus/
+/incoming/
+
+# Секреты и локальная конфигурация.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials*
+
+# Python, тесты и артефакты сборки.
+.venv/
+.venv-*/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Локальная инвентаризация зависит от экспериментального кода MCP.
+/scripts/inventory.py
+
+.DS_Store
+*.log
