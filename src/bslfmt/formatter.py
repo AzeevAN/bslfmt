@@ -43,9 +43,11 @@ _IDENTIFIER = re.compile(r"[A-Za-zА-Яа-яЁё_][A-Za-zА-Яа-яЁё0-9_]*")
 # Поля кортежа токена (TokenRow): порядок полей Token.
 _KIND, _TEXT, _START, _END, _LINE = range(5)
 _NOT_NEWLINE = re.compile(r"[^\r\n]")
-# Запятая внутри токена кода, после которой нужен пробел: не перед «)» и не
-# в конце токена (там решает следующий токен).
-_COMMA_WITHOUT_SPACE = re.compile(r",(?!\)|$)")
+# Запятая или «;» внутри токена кода, после которых нужен пробел: не в конце
+# токена (там решает следующий токен), запятая — не перед «)», «;» — не
+# перед «;» (пустой оператор) и не перед пробельным символом внутри токена
+# (\u2028, \x85…: для BSL это не перевод строки, их не трогаем).
+_SEPARATOR_WITHOUT_SPACE = re.compile(r",(?!\)|$)|;(?![;\s]|$)")
 _MASKED_KINDS = frozenset({"string", "date", "comment", "opaque"})
 _OPEN = {
     "Процедура": "КонецПроцедуры",
@@ -290,7 +292,8 @@ def _normalize_spacing(source: str, collapse_blank_lines: bool = False) -> str:
 
     Бинарный оператор получает по пробелу с каждой стороны, лишние пробелы
     схлопываются в один, хвостовые убираются, отступы сохраняются. После
-    запятой — пробел (кроме конца строки и перед «)»), перед «,» «;» «)» и
+    запятой и «;» — пробел (кроме конца строки, перед «)», а у «;» — перед
+    комментарием и «;»), перед «,» «;» «)» и
     после «(» пробелов нет (кроме «( // комментарий»). Всё — за один разбор:
     вставленные пробелы не соседствуют с другими пробелами и не бывают
     отступом. collapse_blank_lines — заодно оставить не больше одной пустой
@@ -345,12 +348,16 @@ def _normalize_spacing(source: str, collapse_blank_lines: bool = False) -> str:
             if index < last and tokens[index + 1][_KIND] not in {"whitespace", "newline"}:
                 output.append(" ")
             continue
-        if kind == "code" and "," in token[_TEXT] and not on_directive:
-            text = _COMMA_WITHOUT_SPACE.sub(", ", token[_TEXT])
+        if kind == "code" and not on_directive and ("," in token[_TEXT] or ";" in token[_TEXT]):
+            text = _SEPARATOR_WITHOUT_SPACE.sub(r"\g<0> ", token[_TEXT])
             output.append(text)
-            if (text.endswith(",") and index < last
-                    and tokens[index + 1][_KIND] not in {"whitespace", "newline"}):
-                output.append(" ")
+            if index < last:
+                following = tokens[index + 1][_KIND]
+                # После «;» перед комментарием пробел не добавляется.
+                if (following not in {"whitespace", "newline"}
+                        and (text.endswith(",")
+                             or (text.endswith(";") and following != "comment"))):
+                    output.append(" ")
             continue
         output.append(token[_TEXT])
     if collapse_blank_lines and line_blank and blank_run >= 1:
