@@ -872,6 +872,12 @@ class FormatterTests(unittest.TestCase):
                 self.assertEqual(format_code(source.replace("*", "%")),
                                  format_code(source).replace("*", "%"))
 
+    def test_ternary_operator_is_an_operand(self):
+        self.assertEqual(
+            format_code("Процедура П()\nА=?(Б>1,В,Г);\nВозврат Х+?(А,1,2);\nКонецПроцедуры\n"),
+            "Процедура П()\n\tА = ?(Б > 1,В,Г);\n\tВозврат Х + ?(А,1,2);\nКонецПроцедуры\n",
+        )
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(

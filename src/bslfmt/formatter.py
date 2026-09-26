@@ -228,7 +228,7 @@ def _starts_operand(tokens, index: int) -> bool:
     if token[_KIND] != "code":
         return False
     text = token[_TEXT].lstrip()
-    return bool(text) and (text[0].isalnum() or text[0] in "_([{")
+    return bool(text) and (text[0].isalnum() or text[0] in "_([{?")
 
 
 def _line_context(tokens) -> tuple[list[int], list[bool]]:
