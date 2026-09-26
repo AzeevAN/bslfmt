@@ -124,6 +124,23 @@ class LexerTests(unittest.TestCase):
             ["а\r\n", "б\r", "в\n", "г\u2028д\x85е\vж"],
         )
 
+    def test_date_literal_is_a_single_token(self):
+        self.assertEqual(
+            [(token.kind, token.text) for token in lex("Д='2020-01-01 10:00'+1")],
+            [
+                ("code", "Д"),
+                ("operator", "="),
+                ("date", "'2020-01-01 10:00'"),
+                ("operator", "+"),
+                ("code", "1"),
+            ],
+        )
+
+    def test_unterminated_date_literal_fails_closed(self):
+        for source in ("Д = '2020-01-01;", "Д = '2020\n-01-01';"):
+            with self.subTest(source=source), self.assertRaises(LexerError):
+                lex(source)
+
 
 if __name__ == "__main__":
     unittest.main()

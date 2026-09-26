@@ -647,6 +647,27 @@ class FormatterTests(unittest.TestCase):
                     expected.replace("\n", newline),
                 )
 
+    def test_date_literal_is_preserved(self):
+        cases = (
+            ("Д = '2020-01-01';\n", "Д = '2020-01-01';\n"),
+            ("Д = '2020.01.01 10:00:00';\n", "Д = '2020.01.01 10:00:00';\n"),
+            ("Д = '20200101'+86400;\n", "Д = '20200101' + 86400;\n"),
+            ("Д = -'20200101';\n", "Д = -'20200101';\n"),
+            (
+                "Функция Ф(Д = '0001-01-01')\nВозврат Д;\nКонецФункции\n",
+                "Функция Ф(Д = '0001-01-01')\n\tВозврат Д;\nКонецФункции\n",
+            ),
+            ('С = "It\'s";\n', 'С = "It\'s";\n'),
+            ("// Д = '2020-01-01\n", "// Д = '2020-01-01\n"),
+            (
+                "Процедура П()\nД = '20200101'\nКонецПроцедуры\n",
+                "Процедура П()\n\tД = '20200101'\nКонецПроцедуры\n",
+            ),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(format_code(source), expected)
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(

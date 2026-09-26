@@ -259,10 +259,26 @@ def lex(source: str) -> list[Token]:
             add("string", start, start_line, start_column)
             continue
 
+        if current == "'":
+            # Литерал даты: одна строка, содержимое не форматируется.
+            index += 1
+            column += 1
+            while index < length and source[index] not in "'\r\n":
+                index += 1
+                column += 1
+            if index >= length or source[index] != "'":
+                raise LexerError(
+                    f"незакрытый литерал даты в строке {start_line}, колонке {start_column}"
+                )
+            index += 1
+            column += 1
+            add("date", start, start_line, start_column)
+            continue
+
         index += 1
         column += 1
         while index < length:
-            if source[index] in " \t\f\r\n\"+-*/=<>":
+            if source[index] in " \t\f\r\n\"'+-*/=<>":
                 break
             if source.startswith("//", index):
                 break

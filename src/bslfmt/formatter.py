@@ -113,17 +113,26 @@ _CONDITIONAL_DIRECTIVES = {
 }
 
 
-def _masked_code(source: str) -> tuple[str, list[tuple[int, int]], set[int]]:
-    """Скрыть строки, комментарии и непрозрачные области без сдвига координат."""
+def _masked_code(
+    source: str,
+) -> tuple[str, list[tuple[int, int]], list[int], set[int]]:
+    """Скрыть литералы, комментарии и непрозрачные области без сдвига координат.
+
+    Возвращает также диапазоны строк (для многострочных литералов) и начала
+    всех литералов, включая даты, в порядке появления.
+    """
     chars = list(source)
     strings = []
+    literal_starts = []
     opaque_ranges = []
     for token in lex(source):
         if token.kind == "string":
             strings.append((token.start, token.end))
+        if token.kind in {"string", "date"}:
+            literal_starts.append(token.start)
         if token.kind == "opaque":
             opaque_ranges.append((token.start, token.end))
-        if token.kind in {"string", "comment", "opaque"}:
+        if token.kind in {"string", "date", "comment", "opaque"}:
             for index in range(token.start, token.end):
                 if chars[index] not in "\r\n":
                     chars[index] = " "
@@ -136,7 +145,7 @@ def _masked_code(source: str) -> tuple[str, list[tuple[int, int]], set[int]]:
         first_line = bisect_right(line_starts, start) - 1
         last_line = bisect_right(line_starts, max(start, end - 1)) - 1
         opaque_lines.update(range(first_line, last_line + 1))
-    return "".join(chars), strings, opaque_lines
+    return "".join(chars), strings, literal_starts, opaque_lines
 
 
 def _significant_neighbor(tokens, index: int, direction: int) -> int | None:
@@ -149,7 +158,7 @@ def _significant_neighbor(tokens, index: int, direction: int) -> int | None:
 
 
 def _ends_operand(token) -> bool:
-    if token.kind == "string":
+    if token.kind in {"string", "date"}:
         return True
     if token.kind != "code":
         return False
@@ -179,7 +188,7 @@ def _starts_operand(tokens, index: int) -> bool:
     if index is None:
         return False
     token = tokens[index]
-    if token.kind == "string":
+    if token.kind in {"string", "date"}:
         return True
     if token.kind != "code":
         return False
@@ -350,12 +359,11 @@ def _scan_brackets(code: str, brackets: list[str]) -> None:
 
 def _format_active_code(source: str) -> str:
     """Выравнять только отступы распознанных блоков; при сомнении отказать."""
-    masked, strings, opaque_lines = _masked_code(source)
-    string_starts = [start for start, _ in strings]
+    masked, strings, literal_starts, opaque_lines = _masked_code(source)
 
-    def string_starts_between(start: int, end: int) -> bool:
-        position = bisect_left(string_starts, start)
-        return position < len(string_starts) and string_starts[position] < end
+    def literal_starts_between(start: int, end: int) -> bool:
+        position = bisect_left(literal_starts, start)
+        return position < len(literal_starts) and literal_starts[position] < end
     lines = _split_lines(source)
     code_lines = _split_lines(masked)
     if len(lines) != len(code_lines):
@@ -466,7 +474,7 @@ def _format_active_code(source: str) -> str:
             string_follows = False
             if trailing_operator:
                 operator_position = line_start + suffix_start + trailing_operator.start()
-                string_follows = string_starts_between(operator_position, offset)
+                string_follows = literal_starts_between(operator_position, offset)
             operator_continuation = bool(trailing_operator) and not string_follows
             if brackets or operator_continuation:
                 if continuation_depth is None:
@@ -604,7 +612,7 @@ def _format_active_code(source: str) -> str:
             trailing_operator = None
         if trailing_operator:
             line_start = offset - len(line)
-            string_follows = string_starts_between(
+            string_follows = literal_starts_between(
                 line_start + trailing_operator.start(), offset
             )
             if string_follows:
