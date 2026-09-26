@@ -22,6 +22,9 @@ python -m unittest discover -s tests -v
 Команда `bslfmt` появляется в активном окружении. До публикации установку
 выполняют из клона проекта.
 
+CI (GitHub Actions) прогоняет тесты на Windows, macOS и Linux и проверяет
+установленную команду: `python tests/cli_smoke.py` после `pip install .`.
+
 ## CLI
 
 ```sh

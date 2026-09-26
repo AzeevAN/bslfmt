@@ -1,0 +1,35 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Unit tests
+        env:
+          PYTHONPATH: src
+        run: python -m unittest discover -s tests
+      - name: Install package
+        run: python -m pip install .
+      - name: CLI smoke
+        run: python tests/cli_smoke.py
+      - name: CLI smoke in cp866 console
+        if: runner.os == 'Windows'
+        shell: cmd
+        run: |
+          chcp 866
+          python tests/cli_smoke.py
