@@ -1,5 +1,6 @@
 """Проверки наблюдаемого поведения первого formatter MVP."""
 
+import io
 import json
 import tempfile
 import time
@@ -993,6 +994,34 @@ class FormatterTests(unittest.TestCase):
                     redirect_stderr(StringIO()):
                 self.assertEqual(main([str(original), "--output", str(output)]), 2)
             self.assertFalse(output.exists())
+
+    def test_cli_standard_streams_are_utf8_bytes_on_any_platform(self):
+        # Имитация Windows: stdin в кодировке локали с universal newlines,
+        # stdout переводит \n в \r\n. CLI должен работать с байтами UTF-8.
+        source = "Процедура П()\r\nА=1;\r\nКонецПроцедуры\r\n"
+        expected = "Процедура П()\r\n\tА = 1;\r\nКонецПроцедуры\r\n".encode("utf-8")
+        for arguments in (["-"], ["-", "--diff"]):
+            with self.subTest(arguments=arguments):
+                stdin = io.TextIOWrapper(io.BytesIO(source.encode("utf-8")), encoding="cp1251")
+                raw = io.BytesIO()
+                stdout = io.TextIOWrapper(raw, encoding="cp1251", newline="\r\n")
+                with mock.patch("sys.stdin", stdin), mock.patch("sys.stdout", stdout):
+                    self.assertEqual(main(arguments), 0)
+                    stdout.flush()
+                if arguments == ["-"]:
+                    self.assertEqual(raw.getvalue(), expected)
+                else:
+                    self.assertIn("+\tА = 1;\r\n".encode("utf-8"), raw.getvalue())
+                    self.assertNotIn(b"\r\r\n", raw.getvalue())
+
+    def test_cli_internal_error_has_own_exit_code(self):
+        stderr = StringIO()
+        with mock.patch("bslfmt.__main__.format_code", side_effect=RuntimeError("сбой")), \
+                mock.patch("sys.stdin", StringIO("А = 1;\n")), \
+                redirect_stderr(stderr), redirect_stdout(StringIO()):
+            self.assertEqual(main(["-"]), 3)
+        self.assertIn("внутренняя ошибка", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
 
 if __name__ == "__main__":
     unittest.main()
