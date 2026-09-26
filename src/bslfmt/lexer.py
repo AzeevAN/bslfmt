@@ -234,146 +234,86 @@ def lex(source: str) -> list[Token]:
     return tokens
 
 
+# Простые токены одним шаблоном; строки и даты разбираются отдельно.
+_SIMPLE_TOKEN = re.compile(
+    r"(?P<whitespace>[ \t\f]+)"
+    r"|(?P<newline>\r\n|\r|\n)"
+    r"|(?P<comment>//[^\r\n]*)"
+    r"|(?P<operator>>=|<=|<>|[-+*/=<>])"
+    r"|(?P<code>[^ \t\f\r\n\"'+*/=<>-]+)"
+)
+_STRING_RUN = re.compile(r'[^"\r\n]*')
+_STRING_COMMENT_LINE = re.compile(r"[ \t\f]*//[^\r\n]*")
+_DATE = re.compile(r"'[^'\r\n]*'")
+
+
 def _lex_text(source: str) -> list[Token]:
     """Лексер одного согласованного текста без областей правки."""
     tokens: list[Token] = []
+    append = tokens.append
+    length = len(source)
     index = 0
     line = 1
-    column = 1
-    length = len(source)
-
-    def add(kind: str, start: int, start_line: int, start_column: int) -> None:
-        tokens.append(Token(kind, source[start:index], start, index,
-                            start_line, start_column))
-
-    if source.startswith("\ufeff"):
+    line_start = 0
+    if source.startswith("﻿"):
         # BOM — не часть первого слова: отдельный пробельный токен.
-        index = column = 1
-        column += 1
-        add("whitespace", 0, 1, 1)
+        append(Token("whitespace", "﻿", 0, 1, 1, 1))
+        index = 1
 
     while index < length:
-        start = index
-        start_line = line
-        start_column = column
-        current = source[index]
-
-        if current in " \t\f":
+        char = source[index]
+        if char == '"':
+            start, start_line, start_column = index, line, index - line_start + 1
             index += 1
-            column += 1
-            while index < length and source[index] in " \t\f":
-                index += 1
-                column += 1
-            add("whitespace", start, start_line, start_column)
-            continue
-
-        if current in "\r\n":
-            if current == "\r" and index + 1 < length and source[index + 1] == "\n":
-                index += 2
-            else:
-                index += 1
-            line += 1
-            column = 1
-            add("newline", start, start_line, start_column)
-            continue
-
-        if source.startswith("//", index):
-            index += 2
-            column += 2
-            while index < length and source[index] not in "\r\n":
-                index += 1
-                column += 1
-            add("comment", start, start_line, start_column)
-            continue
-
-        if source.startswith((">=", "<=", "<>"), index):
-            index += 2
-            column += 2
-            add("operator", start, start_line, start_column)
-            continue
-
-        if current in "+-*/=<>":
-            index += 1
-            column += 1
-            add("operator", start, start_line, start_column)
-            continue
-
-        if current == '"':
-            index += 1
-            column += 1
-            closed = False
-            while index < length:
-                char = source[index]
-                if char == '"':
-                    if index + 1 < length and source[index + 1] == '"':
+            while True:
+                index = _STRING_RUN.match(source, index).end()
+                if index >= length:
+                    raise LexerError(
+                        f"незакрытая строка в строке {start_line}, колонке {start_column}",
+                        start_line,
+                        start_column,
+                    )
+                if source[index] == '"':
+                    if source.startswith('"', index + 1):
                         index += 2
-                        column += 2
                         continue
                     index += 1
-                    column += 1
-                    closed = True
                     break
-                if char in "\r\n":
-                    if char == "\r" and index + 1 < length and source[index + 1] == "\n":
-                        index += 2
-                    else:
-                        index += 1
-                    line += 1
-                    column = 1
-                    # В многострочном литерале отдельная BSL-строка-комментарий
-                    # может стоять между строками-продолжениями с '|'. Кавычки
-                    # в ней не закрывают литерал; сам фрагмент остаётся защищённым.
-                    comment_start = index
-                    while comment_start < length and source[comment_start] in " \t\f":
-                        comment_start += 1
-                    if source.startswith("//", comment_start):
-                        column += comment_start - index
-                        index = comment_start
-                        while index < length and source[index] not in "\r\n":
-                            index += 1
-                            column += 1
-                        continue
-                    continue
-                index += 1
-                column += 1
-            if not closed:
-                raise LexerError(
-                    f"незакрытая строка в строке {start_line}, колонке {start_column}",
-                    start_line,
-                    start_column,
-                )
-            add("string", start, start_line, start_column)
+                index += 2 if source.startswith("\r\n", index) else 1
+                line += 1
+                line_start = index
+                # В многострочном литерале отдельная BSL-строка-комментарий
+                # может стоять между строками-продолжениями с '|'. Кавычки
+                # в ней не закрывают литерал; сам фрагмент остаётся защищённым.
+                comment = _STRING_COMMENT_LINE.match(source, index)
+                if comment:
+                    index = comment.end()
+            append(Token("string", source[start:index], start, index,
+                         start_line, start_column))
             continue
-
-        if current == "'":
+        if char == "'":
             # Литерал даты: одна строка, содержимое не форматируется.
-            index += 1
-            column += 1
-            while index < length and source[index] not in "'\r\n":
-                index += 1
-                column += 1
-            if index >= length or source[index] != "'":
+            match = _DATE.match(source, index)
+            column = index - line_start + 1
+            if match is None:
                 raise LexerError(
-                    f"незакрытый литерал даты в строке {start_line}, колонке {start_column}",
-                    start_line,
-                    start_column,
+                    f"незакрытый литерал даты в строке {line}, колонке {column}",
+                    line,
+                    column,
                 )
-            index += 1
-            column += 1
-            add("date", start, start_line, start_column)
+            append(Token("date", match.group(), index, match.end(), line, column))
+            index = match.end()
             continue
-
-        index += 1
-        column += 1
-        while index < length:
-            if source[index] in " \t\f\r\n\"'+-*/=<>":
-                break
-            if source.startswith("//", index):
-                break
-            index += 1
-            column += 1
-        add("code", start, start_line, start_column)
-
+        # Шаблон покрывает любой символ, кроме кавычек, поэтому match не None.
+        # Класс code исключает '/', и код останавливается перед '//'.
+        match = _SIMPLE_TOKEN.match(source, index)
+        kind = match.lastgroup
+        end = match.end()
+        append(Token(kind, match.group(), index, end, line, index - line_start + 1))
+        index = end
+        if kind == "newline":
+            line += 1
+            line_start = end
     return tokens
 
 

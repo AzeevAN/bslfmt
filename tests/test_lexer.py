@@ -180,6 +180,36 @@ class LexerTests(unittest.TestCase):
             [("whitespace", "\ufeff"), ("whitespace", "\t"), ("code", "А")],
         )
 
+    def test_positions_in_multiline_string_with_comment_line_and_cr(self):
+        source = 'А = "x""y\r|z\r// "кавычка\r|w";\rБ'
+        self.assertEqual(
+            [(t.kind, t.text, t.line, t.column) for t in lex(source)],
+            [
+                ("code", "А", 1, 1),
+                ("whitespace", " ", 1, 2),
+                ("operator", "=", 1, 3),
+                ("whitespace", " ", 1, 4),
+                ("string", '"x""y\r|z\r// "кавычка\r|w"', 1, 5),
+                ("code", ";", 4, 4),
+                ("newline", "\r", 4, 5),
+                ("code", "Б", 5, 1),
+            ],
+        )
+
+    def test_error_positions_and_bom_columns(self):
+        for source, position in (
+            ('А = 1;\r\nБ = "без конца\r\n', (2, 5)),
+            ("А = 1;\nД = '2020-01-01;\n", (2, 5)),
+        ):
+            with self.subTest(source=source):
+                with self.assertRaises(LexerError) as caught:
+                    lex(source)
+                self.assertEqual((caught.exception.line, caught.exception.column), position)
+        self.assertEqual(
+            [(t.kind, t.column) for t in lex("﻿А+Б")],
+            [("whitespace", 1), ("code", 2), ("operator", 3), ("code", 4)],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
