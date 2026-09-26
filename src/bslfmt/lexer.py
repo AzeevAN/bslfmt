@@ -261,9 +261,9 @@ def _lex_text(source: str) -> list[Token]:
     index = 0
     line = 1
     line_start = 0
-    if source.startswith("﻿"):
+    if source.startswith("\ufeff"):
         # BOM — не часть первого слова: отдельный пробельный токен.
-        append(Token("whitespace", "﻿", 0, 1, 1, 1))
+        append(Token("whitespace", "\ufeff", 0, 1, 1, 1))
         index = 1
 
     while index < length:

@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from bslfmt.lexer import LexerError, _split_lines, lex, restore
 
@@ -206,10 +207,18 @@ class LexerTests(unittest.TestCase):
                     lex(source)
                 self.assertEqual((caught.exception.line, caught.exception.column), position)
         self.assertEqual(
-            [(t.kind, t.column) for t in lex("﻿А+Б")],
+            [(t.kind, t.column) for t in lex("\ufeffА+Б")],
             [("whitespace", 1), ("code", 2), ("operator", 3), ("code", 4)],
         )
 
+
+    def test_sources_have_no_raw_bom_character(self):
+        # BOM в коде пишется как escape: невидимый символ легко потерять при
+        # правке, и startswith("") молча съест первый символ файла.
+        root = Path(__file__).resolve().parents[1]
+        for path in sorted([*root.glob("src/bslfmt/*.py"), *root.glob("tests/*.py")]):
+            with self.subTest(path=path.name):
+                self.assertNotIn(chr(0xFEFF), path.read_text(encoding="utf-8"))
 
 if __name__ == "__main__":
     unittest.main()
