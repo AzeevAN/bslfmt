@@ -593,6 +593,27 @@ class FormatterTests(unittest.TestCase):
                 format_code(source)
                 self.assertLess(time.perf_counter() - started, 10)
 
+    def test_unary_minus_after_keywords_that_start_expressions(self):
+        cases = (
+            ("Return -X;\n", "Return -X;\n"),
+            ("If A And -B Then\nX = 1;\nEndIf;\n", "If A And -B Then\n\tX = 1;\nEndIf;\n"),
+            ("If Not -B Then\nX = 1;\nEndIf;\n", "If Not -B Then\n\tX = 1;\nEndIf;\n"),
+            ("X = A Or -B;\n", "X = A Or -B;\n"),
+            ("For I = -1 To -5 Do\nX = I;\nEndDo;\n",
+             "For I = -1 To -5 Do\n\tX = I;\nEndDo;\n"),
+            ("For Each X In -Y Do\nEndDo;\n", "For Each X In -Y Do\nEndDo;\n"),
+            ("Для Каждого Х Из -У Цикл\nКонецЦикла;\n", "Для Каждого Х Из -У Цикл\nКонецЦикла;\n"),
+            ("X = A-B;\n", "X = A - B;\n"),
+            ("Если -А > 0 Тогда\nКонецЕсли;\n", "Если -А > 0 Тогда\nКонецЕсли;\n"),
+            ("Если Истина Тогда\nИначеЕсли -А > 0 Тогда\nКонецЕсли;\n",
+             "Если Истина Тогда\nИначеЕсли -А > 0 Тогда\nКонецЕсли;\n"),
+            ("Пока -А > 0 Цикл\nКонецЦикла;\n", "Пока -А > 0 Цикл\nКонецЦикла;\n"),
+            ("While -A > 0 Do\nEndDo;\n", "While -A > 0 Do\nEndDo;\n"),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(format_code(source), expected)
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(

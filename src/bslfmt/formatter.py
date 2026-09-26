@@ -53,6 +53,19 @@ _CANONICAL = {
 }
 _CANONICAL.update(_ENGLISH_STRUCTURAL)
 _THEN_WORDS = frozenset({"тогда", "then"})
+# Слова, после которых начинается выражение: знак за ними унарный.
+_EXPRESSION_STARTERS = frozenset({
+    "возврат", "return",
+    "не", "not",
+    "и", "and",
+    "или", "or",
+    "если", "if",
+    "иначеесли", "elsif", "elseif",
+    "пока", "while",
+    "по", "to",
+    "из", "in",
+    "от", "до", "шаг",
+})
 
 
 @dataclass
@@ -151,9 +164,7 @@ def _ends_operand(token) -> bool:
     if re.search(r"(?:\d+(?:[.,]\d*)?|[.,]\d+)[EeЕе]$", tail):
         return False
     last_word = re.search(r"[А-Яа-яЁёA-Za-z_]+$", tail)
-    if last_word and last_word.group().casefold() in {
-        "возврат", "не", "и", "или", "по", "от", "до", "шаг"
-    }:
+    if last_word and last_word.group().casefold() in _EXPRESSION_STARTERS:
         return False
     return text[-1].isalnum() or text[-1] in "_)]}"
 
