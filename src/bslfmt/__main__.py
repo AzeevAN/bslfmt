@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import difflib
+import errno
 import os
 import re
 import shutil
@@ -129,7 +130,7 @@ def _read(name: str) -> str:
     path = Path(name)
     if path.is_dir():
         # На Windows open() каталога даёт PermissionError, поэтому проверяем сами.
-        raise IsADirectoryError(f"это каталог, а не файл: {name}")
+        raise IsADirectoryError(errno.EISDIR, "это каталог", name)
     with path.open("r", encoding="utf-8", newline="") as stream:
         return stream.read()
 
@@ -138,20 +139,30 @@ def _display_name(name: str) -> str:
     return "стандартный ввод" if name == "-" else name
 
 
-def _describe(error: BaseException) -> str:
+_OS_ERRORS = (
+    (FileNotFoundError, "файл не найден"),
+    (FileExistsError, "файл уже существует"),
+    (IsADirectoryError, "это каталог, а не файл"),
+    (NotADirectoryError, "в пути файл вместо каталога"),
+    (PermissionError, "нет доступа"),
+)
+
+
+def _describe(error: BaseException, name: str) -> str:
     """Текст ошибки по-русски; прочие ошибки — как есть.
 
     strerror есть только у ошибок, созданных ОС: свои сообщения выводятся
-    без замены.
+    без замены. Путь из ошибки добавляется, если это не сам входной файл
+    (например, файл --output или временный файл рядом).
     """
     if isinstance(error, UnicodeDecodeError):
         return f"файл не в кодировке UTF-8 (байт {error.start})"
-    if isinstance(error, FileNotFoundError) and error.strerror:
-        return "файл не найден"
-    if isinstance(error, IsADirectoryError) and error.strerror:
-        return "это каталог, а не файл"
-    if isinstance(error, PermissionError) and error.strerror:
-        return "нет доступа"
+    if isinstance(error, OSError) and error.strerror:
+        for kind, text in _OS_ERRORS:
+            if isinstance(error, kind):
+                if error.filename is not None and str(error.filename) != name:
+                    return f"{text}: {error.filename}"
+                return text
     return str(error)
 
 
@@ -362,7 +373,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             result = _process(name, args)
         except (OSError, UnicodeError, LexerError, FormatError) as error:
-            _report_error(f"{_display_name(name)}: {_describe(error)}")
+            _report_error(f"{_display_name(name)}: {_describe(error, name)}")
             result = FAILED
         except Exception as error:
             # Ошибка в самом форматтере: короткое сообщение без traceback.

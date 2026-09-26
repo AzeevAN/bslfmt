@@ -114,6 +114,24 @@ class CliTests(unittest.TestCase):
                 self.assertNotIn("argument", err)
                 self.assertNotIn("Errno", err)
 
+    def test_output_errors_name_the_output_file(self):
+        source = str(self.write("м.bsl", UNFORMATTED))
+        existing = str(self.write("есть.bsl", FORMATTED))
+        missing_dir = str(self.dir / "нет" / "выход.bsl")
+        for target, fragment in ((missing_dir, f"файл не найден: {missing_dir}"),
+                                 (existing, f"файл уже существует: {existing}")):
+            with self.subTest(target=target):
+                code, _, err = run([source, "--output", target])
+                self.assertEqual(code, 2)
+                self.assertIn(fragment, err)
+                self.assertNotIn("Errno", err)
+
+    def test_directory_is_named_once(self):
+        code, _, err = run([str(self.dir)])
+        self.assertEqual(code, 2)
+        self.assertEqual(err.count(str(self.dir)), 1)
+        self.assertIn("это каталог, а не файл", err)
+
     def test_non_utf8_file_is_reported_in_russian(self):
         path = self.dir / "cp1251.bsl"
         path.write_bytes("А = 1;\n".encode("cp1251"))
