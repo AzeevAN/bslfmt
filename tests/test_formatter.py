@@ -495,6 +495,31 @@ class FormatterTests(unittest.TestCase):
             "Процедура Пример()\r\n\tСообщить(1);\r\nКонецПроцедуры",
         )
 
+    def test_byte_order_mark_before_first_line_directive(self):
+        cases = (
+            (
+                "﻿#Область Р\nПроцедура П()\nСообщить(1);\nКонецПроцедуры\n#КонецОбласти\n",
+                "﻿#Область Р\nПроцедура П()\n\tСообщить(1);\nКонецПроцедуры\n#КонецОбласти\n",
+            ),
+            (
+                "﻿#Если Сервер Тогда\nПроцедура П()\nСообщить(1);\nКонецПроцедуры\n#КонецЕсли\n",
+                "﻿#Если Сервер Тогда\nПроцедура П()\n\tСообщить(1);\nКонецПроцедуры\n#КонецЕсли\n",
+            ),
+            (
+                "﻿#Вставка\nСообщить(1);\n#КонецВставки\nПроцедура П()\nСообщить(2);\nКонецПроцедуры\n",
+                "﻿#Вставка\nСообщить(1);\n#КонецВставки\nПроцедура П()\n\tСообщить(2);\nКонецПроцедуры\n",
+            ),
+            (
+                "﻿Процедура П()\nСообщить(1);\nКонецПроцедуры\n",
+                "﻿Процедура П()\n\tСообщить(1);\nКонецПроцедуры\n",
+            ),
+            ("﻿", "﻿"),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(format_code(source), expected)
+                self.assertEqual(format_code(expected), expected)
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(

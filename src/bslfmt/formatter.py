@@ -687,6 +687,10 @@ def _protected_patch_lines(source: str) -> set[int]:
 
 def format_code(source: str) -> str:
     """Форматировать активный BSL, оставляя области правки дословными."""
+    # BOM из выгрузок 1С не входит в первую строку: иначе директива в ней
+    # не распознаётся. Он возвращается в результат без изменений.
+    if source.startswith("﻿"):
+        return "﻿" + format_code(source[1:])
     if not _patch_regions(source):
         return _format_active_code(source)
 
