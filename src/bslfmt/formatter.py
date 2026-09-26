@@ -16,7 +16,7 @@ from .lexer import (
     _patch_regions,
     LexerError,
     _split_lines,
-    lex,
+    _token_rows,
 )
 
 
@@ -40,6 +40,8 @@ DEFAULT_MAX_DEPTH = 100
 
 
 _IDENTIFIER = re.compile(r"[A-Za-zА-Яа-яЁё_][A-Za-zА-Яа-яЁё0-9_]*")
+# Поля кортежа токена (TokenRow): порядок полей Token.
+_KIND, _TEXT, _START, _END, _LINE = range(5)
 _NOT_NEWLINE = re.compile(r"[^\r\n]")
 _MASKED_KINDS = frozenset({"string", "date", "comment", "opaque"})
 _OPEN = {
@@ -151,24 +153,24 @@ def _masked_code(
 
     Возвращает также диапазоны строк (для многострочных литералов) и начала
     всех литералов, включая даты, в порядке появления. tokens — готовый
-    результат lex(source), если он уже есть.
+    результат _token_rows(source), если он уже есть.
     """
     parts = []
     strings = []
     literal_starts = []
     opaque_ranges = []
-    for token in lex(source) if tokens is None else tokens:
-        kind = token.kind
+    for token in _token_rows(source) if tokens is None else tokens:
+        kind = token[_KIND]
         if kind == "string":
-            strings.append((token.start, token.end))
+            strings.append((token[_START], token[_END]))
         if kind == "string" or kind == "date":
-            literal_starts.append(token.start)
+            literal_starts.append(token[_START])
         if kind == "opaque":
-            opaque_ranges.append((token.start, token.end))
+            opaque_ranges.append((token[_START], token[_END]))
         if kind in _MASKED_KINDS:
-            parts.append(_NOT_NEWLINE.sub(" ", token.text))
+            parts.append(_NOT_NEWLINE.sub(" ", token[_TEXT]))
         else:
-            parts.append(token.text)
+            parts.append(token[_TEXT])
 
     line_starts = [0]
     for line in _split_lines(source):
@@ -184,18 +186,18 @@ def _masked_code(
 def _significant_neighbor(tokens, index: int, direction: int) -> int | None:
     index += direction
     while 0 <= index < len(tokens):
-        if tokens[index].kind not in {"whitespace", "newline", "comment"}:
+        if tokens[index][_KIND] not in {"whitespace", "newline", "comment"}:
             return index
         index += direction
     return None
 
 
 def _ends_operand(token) -> bool:
-    if token.kind in {"string", "date"}:
+    if token[_KIND] in {"string", "date"}:
         return True
-    if token.kind != "code":
+    if token[_KIND] != "code":
         return False
-    text = token.text.rstrip()
+    text = token[_TEXT].rstrip()
     if not text:
         return False
     # Обе проверки смотрят только на конец токена; поиск по всему тексту
@@ -214,18 +216,18 @@ def _ends_operand(token) -> bool:
 def _starts_operand(tokens, index: int) -> bool:
     index = _significant_neighbor(tokens, index - 1, 1)
     # Цепочку унарных знаков проходим циклом: рекурсия падала на длинном вводе.
-    while index is not None and tokens[index].kind == "operator":
-        if tokens[index].text not in ("+", "-"):
+    while index is not None and tokens[index][_KIND] == "operator":
+        if tokens[index][_TEXT] not in ("+", "-"):
             return False
         index = _significant_neighbor(tokens, index, 1)
     if index is None:
         return False
     token = tokens[index]
-    if token.kind in {"string", "date"}:
+    if token[_KIND] in {"string", "date"}:
         return True
-    if token.kind != "code":
+    if token[_KIND] != "code":
         return False
-    text = token.text.lstrip()
+    text = token[_TEXT].lstrip()
     return bool(text) and (text[0].isalnum() or text[0] in "_([{")
 
 
@@ -243,12 +245,12 @@ def _line_context(tokens) -> tuple[list[int], list[bool]]:
     for token in tokens:
         line_starts.append(line_start)
         indented.append(blank)
-        text = token.text
+        text = token[_TEXT]
         newline = max(text.rfind("\n"), text.rfind("\r"))
         if newline >= 0:
-            line_start = token.start + newline + 1
+            line_start = token[_START] + newline + 1
             blank = not text[newline + 1:].strip(" \t\f")
-        elif token.kind != "whitespace":
+        elif token[_KIND] != "whitespace":
             blank = False
     return line_starts, indented
 
@@ -285,28 +287,28 @@ def _normalize_spacing(source: str) -> str:
     правила — за один разбор: вставленные у оператора пробелы не соседствуют
     с другими пробелами и не бывают отступом.
     """
-    tokens = lex(source)
+    tokens = _token_rows(source)
     directive_lines = _directive_line_starts(source)
     line_starts, indented = _line_context(tokens)
     last = len(tokens) - 1
     output: list[str] = []
     for index, token in enumerate(tokens):
-        kind = token.kind
+        kind = token[_KIND]
         on_directive = line_starts[index] in directive_lines
         if kind == "whitespace":
             if on_directive or indented[index]:
-                output.append(token.text)
-            elif index < last and tokens[index + 1].kind != "newline":
+                output.append(token[_TEXT])
+            elif index < last and tokens[index + 1][_KIND] != "newline":
                 output.append(" ")
             continue
         if kind == "operator" and not on_directive and _is_binary_operator(tokens, index):
-            if index and tokens[index - 1].kind not in {"whitespace", "newline", "comment"}:
+            if index and tokens[index - 1][_KIND] not in {"whitespace", "newline", "comment"}:
                 output.append(" ")
-            output.append(token.text)
-            if index < last and tokens[index + 1].kind not in {"whitespace", "newline"}:
+            output.append(token[_TEXT])
+            if index < last and tokens[index + 1][_KIND] not in {"whitespace", "newline"}:
                 output.append(" ")
             continue
-        output.append(token.text)
+        output.append(token[_TEXT])
     return "".join(output)
 
 
@@ -791,8 +793,8 @@ def _protected_patch_lines(source: str) -> set[int]:
 
 def _significant_tokens(source: str) -> list:
     return [
-        token for token in lex(source)
-        if token.kind not in {"whitespace", "newline"}
+        token for token in _token_rows(source)
+        if token[_KIND] not in {"whitespace", "newline"}
     ]
 
 
@@ -804,7 +806,7 @@ def _check_significant_tokens(source: str, result: str, tokens=None) -> None:
     правки — контекст, а не обязательно корректный BSL: если исходный вид
     конфигурации не разбирается, сравнивать в нём нечего (сами области
     копируются дословно), а вид кода расширения проверяется всегда.
-    tokens — готовый результат lex(source) для текста без областей правки.
+    tokens — готовый результат _token_rows(source) для текста без областей правки.
     """
     before_views = _code_views(source)
     after_views = _code_views(result)
@@ -813,7 +815,7 @@ def _check_significant_tokens(source: str, result: str, tokens=None) -> None:
     for number, (before_view, after_view) in enumerate(zip(before_views, after_views)):
         try:
             if tokens is not None and len(before_views) == 1:
-                before = [t for t in tokens if t.kind not in {"whitespace", "newline"}]
+                before = [t for t in tokens if t[_KIND] not in {"whitespace", "newline"}]
             else:
                 before = _significant_tokens(before_view)
         except LexerError:
@@ -822,8 +824,8 @@ def _check_significant_tokens(source: str, result: str, tokens=None) -> None:
             continue
         after = _significant_tokens(after_view)
         for old, new in zip(before, after):
-            if (old.kind, old.text) != (new.kind, new.text):
-                raise FormatError("форматирование изменило значимые токены", old.line)
+            if (old[_KIND], old[_TEXT]) != (new[_KIND], new[_TEXT]):
+                raise FormatError("форматирование изменило значимые токены", old[_LINE])
         if len(before) != len(after):
             raise FormatError("форматирование изменило значимые токены")
 
@@ -848,7 +850,7 @@ def format_code(
     bom = source[:len(source) - len(body)]
     # Без областей расширения токены исходника нужны дважды — в форматировании
     # и в итоговой проверке; разбираем один раз.
-    tokens = None if _patch_regions(body) else lex(body)
+    tokens = None if _patch_regions(body) else _token_rows(body)
     result = _format_with_patches(body, max_depth, tokens)
     _check_significant_tokens(body, result, tokens)
     return bom + result

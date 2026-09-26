@@ -1,7 +1,7 @@
 import unittest
 from pathlib import Path
 
-from bslfmt.lexer import LexerError, _split_lines, lex, restore
+from bslfmt.lexer import LexerError, _split_lines, _token_rows, lex, restore
 
 
 class LexerTests(unittest.TestCase):
@@ -219,6 +219,31 @@ class LexerTests(unittest.TestCase):
         for path in sorted([*root.glob("src/bslfmt/*.py"), *root.glob("tests/*.py")]):
             with self.subTest(path=path.name):
                 self.assertNotIn(chr(0xFEFF), path.read_text(encoding="utf-8"))
+
+    def test_token_rows_match_lex_fields(self):
+        sources = (
+            'А = "x""y\r|z\r// "кавычка\r|w";\rБ',
+            "\ufeffА+Б // к\n\tД = '20200101';\n",
+            "Процедура П()\r#Вставка\r   Х=1;\r#КонецВставки\rА=1;\rКонецПроцедуры\r",
+            'Т = "a\n#Удаление\n|b\n#КонецУдаления\n|c";\n',
+            "",
+        )
+        for source in sources:
+            with self.subTest(source=source):
+                self.assertEqual(
+                    _token_rows(source),
+                    [(t.kind, t.text, t.start, t.end, t.line, t.column) for t in lex(source)],
+                )
+        for source in ('А = 1;\r\nБ = "без конца\r\n', "Д = '2020;\n"):
+            with self.subTest(source=source):
+                with self.assertRaises(LexerError) as expected:
+                    lex(source)
+                with self.assertRaises(LexerError) as actual:
+                    _token_rows(source)
+                self.assertEqual(
+                    (str(actual.exception), actual.exception.line, actual.exception.column),
+                    (str(expected.exception), expected.exception.line, expected.exception.column),
+                )
 
 if __name__ == "__main__":
     unittest.main()

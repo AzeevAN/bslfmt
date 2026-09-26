@@ -255,7 +255,16 @@ _DATE = re.compile(r"'[^'\r\n]*'")
 
 def _lex_text(source: str) -> list[Token]:
     """Лексер одного согласованного текста без областей правки."""
-    tokens: list[Token] = []
+    return [Token(*row) for row in _lex_rows(source)]
+
+
+# Строка токена для внутренних проходов: поля Token в том же порядке.
+TokenRow = tuple[str, str, int, int, int, int]
+
+
+def _lex_rows(source: str) -> list[TokenRow]:
+    """То же, что _lex_text, но кортежами: создавать Token в разы дороже."""
+    tokens: list[TokenRow] = []
     append = tokens.append
     length = len(source)
     index = 0
@@ -263,7 +272,7 @@ def _lex_text(source: str) -> list[Token]:
     line_start = 0
     if source.startswith("\ufeff"):
         # BOM — не часть первого слова: отдельный пробельный токен.
-        append(Token("whitespace", "\ufeff", 0, 1, 1, 1))
+        append(("whitespace", "\ufeff", 0, 1, 1, 1))
         index = 1
 
     while index < length:
@@ -294,8 +303,8 @@ def _lex_text(source: str) -> list[Token]:
                 comment = _STRING_COMMENT_LINE.match(source, index)
                 if comment:
                     index = comment.end()
-            append(Token("string", source[start:index], start, index,
-                         start_line, start_column))
+            append(("string", source[start:index], start, index,
+                    start_line, start_column))
             continue
         if char == "'":
             # Литерал даты: одна строка, содержимое не форматируется.
@@ -307,7 +316,7 @@ def _lex_text(source: str) -> list[Token]:
                     line,
                     column,
                 )
-            append(Token("date", match.group(), index, match.end(), line, column))
+            append(("date", match.group(), index, match.end(), line, column))
             index = match.end()
             continue
         # Шаблон покрывает любой символ, кроме кавычек, поэтому match не None.
@@ -315,12 +324,19 @@ def _lex_text(source: str) -> list[Token]:
         match = _SIMPLE_TOKEN.match(source, index)
         kind = match.lastgroup
         end = match.end()
-        append(Token(kind, match.group(), index, end, line, index - line_start + 1))
+        append((kind, match.group(), index, end, line, index - line_start + 1))
         index = end
         if kind == "newline":
             line += 1
             line_start = end
     return tokens
+
+
+def _token_rows(source: str) -> list[TokenRow]:
+    """Токены lex(source) кортежами — для внутренних проходов форматтера."""
+    if not _patch_regions(source):
+        return _lex_rows(source)
+    return [(t.kind, t.text, t.start, t.end, t.line, t.column) for t in lex(source)]
 
 
 def restore(tokens: list[Token]) -> str:
