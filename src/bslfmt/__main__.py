@@ -6,6 +6,7 @@ import argparse
 import contextlib
 import difflib
 import os
+import re
 import shutil
 import stat
 import sys
@@ -154,7 +155,33 @@ def _describe(error: BaseException) -> str:
     return str(error)
 
 
+_PYPROJECT_FIELD = r'^{}\s*=\s*"([^"]*)"'
+
+
+def _source_version(root: Path | None = None) -> str | None:
+    """Версия из pyproject.toml, если пакет запущен из дерева исходников.
+
+    root — корень репозитория (по умолчанию на два уровня выше пакета:
+    src/bslfmt → корень). У установленного пакета там нет pyproject.toml
+    с name = "bslfmt".
+    """
+    if root is None:
+        root = Path(__file__).resolve().parents[2]
+    try:
+        text = (root / "pyproject.toml").read_text(encoding="utf-8")
+    except (OSError, UnicodeError):
+        return None
+    name = re.search(_PYPROJECT_FIELD.format("name"), text, re.MULTILINE)
+    version = re.search(_PYPROJECT_FIELD.format("version"), text, re.MULTILINE)
+    if name is None or name.group(1) != "bslfmt" or version is None:
+        return None
+    return version.group(1)
+
+
 def _version() -> str:
+    source = _source_version()
+    if source is not None:
+        return source
     try:
         return metadata.version("bslfmt")
     except metadata.PackageNotFoundError:

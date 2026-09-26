@@ -1,5 +1,6 @@
 import difflib
 import os
+import re
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -42,8 +43,26 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("usage:", out)
 
     def test_version_comes_from_metadata(self):
-        with mock.patch("bslfmt.__main__.metadata.version", return_value="9.9.9"):
+        with mock.patch("bslfmt.__main__._source_version", return_value=None), \
+                mock.patch("bslfmt.__main__.metadata.version", return_value="9.9.9"):
             self.assertEqual(run(["--version"])[:2], (0, "bslfmt 9.9.9\n"))
+
+    def test_version_from_source_tree_wins(self):
+        pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        expected = re.search(r'^version = "([^"]+)"', pyproject.read_text(encoding="utf-8"),
+                             re.MULTILINE).group(1)
+        with mock.patch("bslfmt.__main__.metadata.version", return_value="0.0.1"):
+            self.assertEqual(run(["--version"])[1], f"bslfmt {expected}\n")
+
+    def test_source_version_ignores_foreign_pyproject(self):
+        from bslfmt.__main__ import _source_version
+        (self.dir / "pyproject.toml").write_text(
+            '[project]\nname = "другой"\nversion = "1.2.3"\n', encoding="utf-8")
+        self.assertIsNone(_source_version(self.dir))
+        self.assertIsNone(_source_version(self.dir / "нет"))
+        (self.dir / "pyproject.toml").write_text(
+            '[project]\nname = "bslfmt"\nversion = "1.2.3"\n', encoding="utf-8")
+        self.assertEqual(_source_version(self.dir), "1.2.3")
 
     def test_usage_errors_are_russian_with_code_2(self):
         a = str(self.write("а.bsl", UNFORMATTED))
