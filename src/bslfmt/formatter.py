@@ -461,6 +461,19 @@ def _scan_directives(
     return region_lines, conditional_lines
 
 
+def _lead_width(line: str) -> int:
+    """Ширина ведущего отступа в колонках (табуляция — до кратного 4)."""
+    width = 0
+    for char in line:
+        if char == "\t":
+            width += 4 - width % 4
+        elif char in " \f":
+            width += 1
+        else:
+            break
+    return width
+
+
 def _reindent(line: str, depth: int) -> str:
     leading = len(line) - len(line.lstrip(" \t\f"))
     return "\t" * depth + line[leading:]
@@ -486,6 +499,9 @@ class _LineFormatter:
         self.continuation_depth: int | None = None
         self.pending_header: tuple[str, int] | None = None
         self.result: list[str] = []
+        # На сколько колонок сдвинулась строка, где начался литерал: строки «|»
+        # многострочного литерала сдвигаются так же.
+        self.literal_delta = 0
         # Строки-комментарии, ждущие отступа следующей строки кода.
         self.pending_comments: list[int] = []
         self.last_dedent = False
@@ -527,6 +543,8 @@ class _LineFormatter:
                 else:
                     self._statement_line(line, code, number)
                 self._place_comments(self.result[code_index])
+            if not inside_string:
+                self.literal_delta = _lead_width(self.result[-1]) - _lead_width(line)
         self._finish()
         return _normalize_spacing("".join(self.result))
 
@@ -633,7 +651,22 @@ class _LineFormatter:
                 self.pending_header = None
                 if not self.brackets and not self.operator_continuation:
                     self.continuation_depth = None
-        self.result.append(line)
+        self.result.append(self._shift_pipe_line(line))
+
+    def _shift_pipe_line(self, line: str) -> str:
+        """Сдвинуть строку «|» литерала вместе со строкой его начала.
+
+        Пробелы перед «|» не входят в значение строки. Другие строки литерала
+        (комментарий, текст без «|») не трогаются; при сдвиге влево снимается
+        столько отступа, сколько есть.
+        """
+        if not self.literal_delta:
+            return line
+        body = line.lstrip(" \t\f")
+        if not body.startswith("|"):
+            return line
+        width = max(0, _lead_width(line) + self.literal_delta)
+        return "\t" * (width // 4) + " " * (width % 4) + body
 
     def _region_line(self, line: str) -> None:
         if self.brackets or self.operator_continuation or self.pending_header is not None:
@@ -849,6 +882,14 @@ def _protected_patch_lines(source: str) -> set[int]:
 # вставленный после запятой, делит токен кода, но не меняет единиц; а
 # пропавший пробел между словами («А Б» → «АБ») меняет.
 _CODE_UNIT = re.compile(r"\w+|\W")
+# Пробелы перед «|» в многострочной строке не входят в её значение и
+# сдвигаются вместе с кодом — итоговая проверка их не сравнивает.
+_PIPE_LEAD = re.compile(r"(\r\n|\r|\n)[ \t\f]*(?=\|)")
+
+
+def _literal_text(row) -> str:
+    text = row[_TEXT]
+    return _PIPE_LEAD.sub(r"\1", text) if row[_KIND] == "string" else text
 
 
 def _is_word_char(char: str) -> bool:
@@ -875,7 +916,7 @@ def _significant_signature(rows) -> str:
             parts.append(text)
             previous_code = text
         else:
-            parts.append(f"\x01{kind}\x02{text}\x03")
+            parts.append(f"\x01{kind}\x02{_literal_text(row)}\x03")
             previous_code = ""
     return "".join(parts)
 
@@ -889,7 +930,7 @@ def _significant_units(rows) -> list[tuple[str, str, int]]:
         if kind == "code":
             units.extend(("code", unit, row[_LINE]) for unit in _CODE_UNIT.findall(row[_TEXT]))
         else:
-            units.append((kind, row[_TEXT], row[_LINE]))
+            units.append((kind, _literal_text(row), row[_LINE]))
     return units
 
 

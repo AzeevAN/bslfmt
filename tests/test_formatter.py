@@ -26,11 +26,12 @@ class FormatterTests(unittest.TestCase):
                 actual = format_code(case["input"])
                 self.assertEqual(actual, case["expected"])
                 self.assertEqual(format_code(actual), actual)
-                before = [(t.kind, t.text) for t in lex(case["input"])
-                          if t.kind not in {"whitespace", "newline"}]
-                after = [(t.kind, t.text) for t in lex(actual)
-                         if t.kind not in {"whitespace", "newline"}]
-                self.assertEqual(before, after)
+                # Как в итоговой проверке: код по словам и знакам, строки без
+                # пробелов перед «|».
+                def units(text):
+                    return [unit[:2] for unit in
+                            formatter._significant_units(formatter._token_rows(text))]
+                self.assertEqual(units(case["input"]), units(actual))
 
     def test_invalid_structure_fails_closed(self):
         for source in (
@@ -287,7 +288,7 @@ class FormatterTests(unittest.TestCase):
             "\tЕсли Истина Тогда\n"
             '\t\tСообщить("первая ветвь");\n'
             '\tИначеЕсли Найти("a\n'
-            '\t\t|b", Значение) = 0 Тогда\n'
+            '\t\t\t|b", Значение) = 0 Тогда\n'
             '\t\tСообщить("вторая ветвь");\n'
             '\tКонецЕсли;\n'
             "КонецПроцедуры\n"
@@ -816,7 +817,7 @@ class FormatterTests(unittest.TestCase):
             "#Вставка\n"
             "|  Б\n"
             "#КонецВставки\n"
-            '|  ИЗ Т";\n'
+            '\t|  ИЗ Т";\n'
             '\tСообщить("Готово" + Текст);\n'
             "КонецПроцедуры\n"
         )
@@ -961,6 +962,23 @@ class FormatterTests(unittest.TestCase):
             # сразу после области — обычные пустые строки
             ("Процедура П()\n#Вставка\nА=1;\n#КонецВставки\n\n\n\nКонецПроцедуры\n",
              "Процедура П()\n#Вставка\nА=1;\n#КонецВставки\n\nКонецПроцедуры\n"),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(format_code(source), expected)
+                self.assertEqual(format_code(expected), expected)
+
+    def test_pipe_lines_move_with_literal_start(self):
+        cases = (
+            # начало литерала сдвинулось на +1 — строки «|» тоже
+            ("Процедура П()\nЗапрос.Текст = \"ВЫБРАТЬ\n|\tТ.А\n//|\tТ.Б\n  |ИЗ Т\";\nКонецПроцедуры\n",
+             "Процедура П()\n\tЗапрос.Текст = \"ВЫБРАТЬ\n\t|\tТ.А\n//|\tТ.Б\n\t  |ИЗ Т\";\nКонецПроцедуры\n"),
+            # на −1: снимается, сколько есть
+            ("Процедура П()\n\t\tТ = \"а\n\t\t|б\n\t|в\n|г\";\nКонецПроцедуры\n",
+             "Процедура П()\n\tТ = \"а\n\t|б\n|в\n|г\";\nКонецПроцедуры\n"),
+            # сдвига нет — строки литерала как были
+            ("Процедура П()\n\tТ = \"а\n   |б\";\nКонецПроцедуры\n",
+             "Процедура П()\n\tТ = \"а\n   |б\";\nКонецПроцедуры\n"),
         )
         for source, expected in cases:
             with self.subTest(source=source):
