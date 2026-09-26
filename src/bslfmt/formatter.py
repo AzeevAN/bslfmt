@@ -498,15 +498,42 @@ def _lead_width(line: str) -> int:
     return width
 
 
-def _continuation_indent(line: str, depth: int) -> str:
-    """Отступ строки продолжения: не меньше depth, более глубокий — как был.
+def _shift_lead(line: str, delta: int) -> str:
+    """Сдвинуть ведущий отступ на delta колонок, сохранив его вид.
+
+    Вправо на целые табы — табы дописываются перед исходным отступом; влево —
+    снимается ровно delta колонок с начала, если это возможно; иначе отступ
+    пересобирается из табов и пробелов.
+    """
+    body = line.lstrip(" \t\f")
+    lead = line[:len(line) - len(body)]
+    if delta > 0 and delta % 4 == 0:
+        return "\t" * (delta // 4) + line
+    if delta < 0:
+        removed = 0
+        for index, char in enumerate(lead):
+            if removed == -delta:
+                return lead[index:] + body
+            removed += 4 - removed % 4 if char == "\t" else 1
+            if removed > -delta:
+                break
+        else:
+            if removed == -delta:
+                return body
+    width = max(0, _lead_width(line) + delta)
+    return "\t" * (width // 4) + " " * (width % 4) + body
+
+
+def _continuation_indent(line: str, depth: int, delta: int = 0) -> str:
+    """Отступ строки продолжения: не меньше depth, более глубокий — сохраняется.
 
     std444: стандартный отступ или выравнивание по первому операнду или
-    параметру; выравнивание, которое глубже стандартного, сохраняется.
+    параметру. Выравнивание глубже стандартного сохраняется относительно
+    инструкции: delta — на сколько колонок форматтер сдвинул её первую строку.
     """
-    if _lead_width(line) > depth * 4:
-        return line
-    return _reindent(line, depth)
+    if _lead_width(line) + delta <= depth * 4:
+        return _reindent(line, depth)
+    return _shift_lead(line, delta) if delta else line
 
 
 def _reindent(line: str, depth: int) -> str:
@@ -537,6 +564,9 @@ class _LineFormatter:
         # На сколько колонок сдвинулась строка, где начался литерал: строки «|»
         # многострочного литерала сдвигаются так же.
         self.literal_delta = 0
+        # На сколько колонок сдвинута первая строка текущей инструкции или
+        # заголовка: выровненные глубже продолжения сдвигаются так же.
+        self.statement_delta = 0
         # Последний значимый знак предыдущей строки кода (для «=» в конце).
         self.previous_code_end = ""
         # Строки-комментарии, ждущие отступа следующей строки кода.
@@ -761,7 +791,9 @@ class _LineFormatter:
         # std444 п.5: условие продолжается со стандартным отступом или по
         # первому условию; строка с «)» в начале — на уровне заголовка.
         same_level = line.lstrip(" \t\f").startswith(")")
-        self.result.append(_continuation_indent(line, header_depth + (0 if same_level else 1)))
+        self.result.append(_continuation_indent(
+            line, header_depth + (0 if same_level else 1), self.statement_delta
+        ))
         if terminator_end is not None:
             self._complete_pending_header(header_kind)
             self.pending_header = None
@@ -827,6 +859,7 @@ class _LineFormatter:
         self.last_dedent = dedent_branch and bool(self.stack)
         # Вне блоков (аннотации, переменные и код модуля) — колонка 0 (std456 п.5.1).
         self.result.append(_reindent(line, depth))
+        self.statement_delta = _lead_width(self.result[-1]) - _lead_width(line)
 
         if starts_multiline_declaration:
             self.continuation_depth = depth
@@ -851,10 +884,16 @@ class _LineFormatter:
                 body.startswith('"') and self.previous_code_end == "="
             )
             depth = self.continuation_depth + (0 if same_level else 1)
-            self.result.append(_continuation_indent(line, depth))
+            indented = _continuation_indent(line, depth, self.statement_delta)
+            if same_level and _lead_width(indented) < (depth + 1) * 4:
+                # Для «)» и текста запроса сохраняется только отступ на целый
+                # уровень и глубже; меньший — шум, а не выравнивание.
+                indented = _reindent(line, depth)
+            self.result.append(indented)
         else:
             # Первая строка многострочной инструкции — на уровне инструкции.
             self.result.append(_reindent(line, self.continuation_depth))
+            self.statement_delta = _lead_width(self.result[-1]) - _lead_width(line)
         self.operator_continuation = bool(trailing_operator) and not self.brackets
         if not self.brackets and not self.operator_continuation:
             self.continuation_depth = None

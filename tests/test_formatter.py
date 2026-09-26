@@ -1022,6 +1022,22 @@ class FormatterTests(unittest.TestCase):
                 self.assertEqual(format_code(source), expected)
                 self.assertEqual(format_code(expected), expected)
 
+    def test_deeper_continuation_moves_with_its_statement(self):
+        cases = (
+            # инструкция сдвинулась влево — продолжения за ней
+            ("Процедура П()\n\t\t\tЕсли А\n\t\t\t\tИ Б Тогда\n\t\t\t\tВ = 1;\n\t\t\tКонецЕсли;\nКонецПроцедуры\n",
+             "Процедура П()\n\tЕсли А\n\t\tИ Б Тогда\n\t\tВ = 1;\n\tКонецЕсли;\nКонецПроцедуры\n"),
+            ("Процедура П()\n\t\tС = Новый Структура(\"А, Б\",\n\t\t\tЗначение1,\n\t\t\tЗначение2);\nКонецПроцедуры\n",
+             "Процедура П()\n\tС = Новый Структура(\"А, Б\",\n\t\tЗначение1,\n\t\tЗначение2);\nКонецПроцедуры\n"),
+            # вправо: выравнивание под скобку едет вместе со скобкой
+            ("Процедура П()\nС = Ф(А,\n      Б);\nКонецПроцедуры\n",
+             "Процедура П()\n\tС = Ф(А,\n\t      Б);\nКонецПроцедуры\n"),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(format_code(source), expected)
+                self.assertEqual(format_code(expected), expected)
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(
