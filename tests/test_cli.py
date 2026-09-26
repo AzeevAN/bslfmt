@@ -1,3 +1,4 @@
+import difflib
 import os
 import tempfile
 import unittest
@@ -7,7 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 from bslfmt import format_code
-from bslfmt.__main__ import main
+from bslfmt.__main__ import _changed_lines, main
 
 UNFORMATTED = "Процедура П()\nА=1;\nКонецПроцедуры\n"
 FORMATTED = "Процедура П()\n\tА = 1;\nКонецПроцедуры\n"
@@ -213,6 +214,54 @@ class CliTests(unittest.TestCase):
         code, out, _ = run(["--diff", str(a), str(b)])
         self.assertEqual(code, 0)
         self.assertEqual(out.count("+\tА = 1;"), 2)
+
+    def test_in_place_summary_failure_keeps_success(self):
+        class ClosedStdout:
+            def write(self, text):
+                raise BrokenPipeError(32, "Broken pipe")
+
+            def flush(self):
+                pass
+
+        path = self.write("м.bsl", UNFORMATTED)
+        stderr = StringIO()
+        with mock.patch("sys.stdout", ClosedStdout()), redirect_stderr(stderr):
+            code = main(["-i", str(path)])
+        self.assertEqual((code, stderr.getvalue()), (0, ""))
+        self.assertEqual(path.read_text(encoding="utf-8"), FORMATTED)
+
+    def test_changed_lines_matches_difflib_without_it(self):
+        def reference(source, formatted):
+            a, b = source.splitlines(True), formatted.splitlines(True)
+            matcher = difflib.SequenceMatcher(None, a, b)
+            return sum(max(i2 - i1, j2 - j1)
+                       for tag, i1, i2, j1, j2 in matcher.get_opcodes() if tag != "equal")
+
+        sources = (
+            "Процедура П()\nА=1;\n\n\n\nБ = 2;\nКонецПроцедуры\n",
+            "Процедура П()\n\t// удалить\nА=1;\n\n\t// и это\n\nБ=2;\nКонецПроцедуры\n",
+            "А = 1;\r\n\r\n\r\n\r\nБ=2;\r\n",
+            "Т = \"а\n\n\n|б\";\n\n\n\nБ = 1;\n",
+        )
+        for source in sources:
+            for strip in (False, True):
+                formatted = format_code(source, strip_body_comments=strip)
+                expected = reference(source, formatted)
+                with self.subTest(source=source, strip=strip), \
+                        mock.patch("bslfmt.__main__.difflib.SequenceMatcher",
+                                   side_effect=AssertionError("медленная ветка")):
+                    self.assertEqual(_changed_lines(source, formatted), expected)
+
+    def test_changed_lines_falls_back_for_unrelated_text(self):
+        self.assertEqual(_changed_lines("а\nб\n", "в\n"), 2)
+        self.assertEqual(_changed_lines("а\n", "а\nб\n"), 1)
+
+    def test_diff_from_standard_input(self):
+        with mock.patch("sys.stdin", StringIO(UNFORMATTED)):
+            code, out, err = run(["--diff", "-"])
+        self.assertEqual((code, err), (0, ""))
+        self.assertTrue(out.startswith("--- -\n+++ - (formatted)\n"))
+        self.assertIn("+\tА = 1;", out)
 
     def test_standard_input_named_in_errors(self):
         with mock.patch("sys.stdin", StringIO(BROKEN)):

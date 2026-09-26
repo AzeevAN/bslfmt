@@ -162,9 +162,23 @@ def _version() -> str:
 
 
 def _changed_lines(source: str, formatted: str) -> int:
+    """Сколько строк изменено или удалено.
+
+    Форматтер меняет в строке только пробелы и удаляет целые строки (лишние
+    пустые, комментарии с -sbc), поэтому строки без пробелов сопоставляются
+    по порядку за один проход. Если так не сошлось — общее сравнение difflib
+    (на больших модулях оно занимало больше секунды).
+    """
     before, after = _split_lines(source), _split_lines(formatted)
-    if len(before) == len(after):
-        return sum(old != new for old, new in zip(before, after))
+    changed = position = 0
+    for line in before:
+        if position < len(after) and "".join(line.split()) == "".join(after[position].split()):
+            changed += line != after[position]
+            position += 1
+        else:
+            changed += 1
+    if position == len(after):
+        return changed
     matcher = difflib.SequenceMatcher(None, before, after)
     return sum(
         max(i2 - i1, j2 - j1)
@@ -252,15 +266,29 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
     return args
 
 
+def _summary(text: str) -> None:
+    """Сводка -i: файл уже записан, поэтому сбой вывода не делает его неудачным.
+
+    После сбоя stdout перенаправляется в devnull: иначе Python при выходе
+    снова попытается сбросить буфер и напечатает BrokenPipeError.
+    """
+    try:
+        _write(sys.stdout, text)
+    except OSError:
+        with contextlib.suppress(OSError, ValueError, AttributeError):
+            devnull = os.open(os.devnull, os.O_WRONLY)
+            os.dup2(devnull, sys.stdout.fileno())
+
+
 def _process(name: str, args: argparse.Namespace) -> int:
     source = _read(name)
     formatted = format_code(source, strip_body_comments=args.strip_body_comments)
     if args.in_place:
         if formatted == source:
-            _write(sys.stdout, f"{name}: без изменений\n")
+            _summary(f"{name}: без изменений\n")
         else:
             _replace_file(Path(name), formatted)
-            _write(sys.stdout, f"{name}: изменён (строк: {_changed_lines(source, formatted)})\n")
+            _summary(f"{name}: изменён (строк: {_changed_lines(source, formatted)})\n")
         return OK
     if args.check:
         if formatted == source:
