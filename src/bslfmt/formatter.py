@@ -155,16 +155,16 @@ def _ends_operand(token) -> bool:
 
 def _starts_operand(tokens, index: int) -> bool:
     index = _significant_neighbor(tokens, index - 1, 1)
+    # Цепочку унарных знаков проходим циклом: рекурсия падала на длинном вводе.
+    while index is not None and tokens[index].kind == "operator":
+        if tokens[index].text not in ("+", "-"):
+            return False
+        index = _significant_neighbor(tokens, index, 1)
     if index is None:
         return False
     token = tokens[index]
     if token.kind == "string":
         return True
-    if token.kind == "operator":
-        if token.text not in "+-":
-            return False
-        next_index = _significant_neighbor(tokens, index, 1)
-        return next_index is not None and _starts_operand(tokens, next_index)
     if token.kind != "code":
         return False
     text = token.text.lstrip()

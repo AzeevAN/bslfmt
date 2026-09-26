@@ -555,6 +555,10 @@ class FormatterTests(unittest.TestCase):
         ), self.assertRaises(FormatError):
             format_code("Сообщить(1);\n")
 
+    def test_long_unary_operator_chain_does_not_recurse(self):
+        source = "А = 1" + " -" * 10000 + " 1;\n"
+        self.assertEqual(format_code(source), source)
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(
