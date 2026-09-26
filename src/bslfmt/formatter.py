@@ -393,26 +393,24 @@ def _format_active_code(source: str, max_depth: int | None) -> str:
     """Выравнять только отступы распознанных блоков; при сомнении отказать."""
     cursor = _Position()
     try:
-        return _format_lines(source, max_depth, cursor)
+        return _LineFormatter(source, max_depth, cursor).run()
     except FormatError as error:
         if error.line is None and cursor.line is not None:
             raise FormatError(error.message, cursor.line) from None
         raise
 
 
-def _format_lines(source: str, max_depth: int | None, cursor: _Position) -> str:
-    masked, strings, literal_starts, opaque_lines = _masked_code(source)
+_TRAILING_OPERATOR = re.compile(r"(?:[+*/=<>,.-]|\b(?:И|ИЛИ|НЕ)\b)\s*$", re.IGNORECASE)
 
-    def literal_starts_between(start: int, end: int) -> bool:
-        position = bisect_left(literal_starts, start)
-        return position < len(literal_starts) and literal_starts[position] < end
-    lines = _split_lines(source)
-    code_lines = _split_lines(masked)
-    if len(lines) != len(code_lines):
-        raise FormatError("не удалось сопоставить строки")
 
-    # Проверить границы директив до форматирования: неизвестная или непарная
-    # директива даёт отказ. Строки областей расширения здесь уже скрыты.
+def _scan_directives(
+    code_lines: list[str], cursor: _Position
+) -> tuple[set[int], dict[int, str]]:
+    """Проверить директивы до форматирования и вернуть их строки.
+
+    Неизвестная или непарная директива даёт отказ. Строки областей
+    расширения к этому моменту уже скрыты.
+    """
     region_lines: set[int] = set()
     region_stack: list[int] = []
     conditional_lines: dict[int, str] = {}
@@ -463,186 +461,215 @@ def _format_lines(source: str, max_depth: int | None, cursor: _Position) -> str:
         raise FormatError("незакрытая область", region_stack[-1] + 1)
     if conditional_syntax:
         raise FormatError("незакрытый #Если", conditional_starts[-1])
+    return region_lines, conditional_lines
 
-    stack: list[_Block] = []
-    conditionals: list[_Conditional] = []
-    brackets: list[str] = []
-    operator_continuation = False
-    continuation_depth: int | None = None
-    pending_header: tuple[str, int] | None = None
-    result: list[str] = []
-    offset = 0
-    string_index = 0
 
-    def snapshot_state() -> _FormatState:
+def _reindent(line: str, depth: int) -> str:
+    leading = len(line) - len(line.lstrip(" \t\f"))
+    return "\t" * depth + line[leading:]
+
+
+class _LineFormatter:
+    """Построчный автомат отступов: состояние блоков, скобок и продолжений."""
+
+    def __init__(self, source: str, max_depth: int | None, cursor: _Position) -> None:
+        masked, self.strings, self.literal_starts, self.opaque_lines = _masked_code(source)
+        self.lines = _split_lines(source)
+        self.code_lines = _split_lines(masked)
+        if len(self.lines) != len(self.code_lines):
+            raise FormatError("не удалось сопоставить строки")
+        self.max_depth = max_depth
+        self.cursor = cursor
+        self.stack: list[_Block] = []
+        self.conditionals: list[_Conditional] = []
+        self.brackets: list[str] = []
+        self.operator_continuation = False
+        self.continuation_depth: int | None = None
+        self.pending_header: tuple[str, int] | None = None
+        self.result: list[str] = []
+        self.offset = 0
+        self.string_index = 0
+
+    def run(self) -> str:
+        region_lines, conditional_lines = _scan_directives(self.code_lines, self.cursor)
+        for number, (line, code) in enumerate(zip(self.lines, self.code_lines)):
+            self.cursor.line = number + 1
+            inside_string = self._advance(line)
+            if number in self.opaque_lines:
+                self.result.append(line)
+            elif inside_string:
+                self._string_tail_line(line, code)
+            elif not line.strip(" \t\f\r\n"):
+                self.result.append(line)
+            elif line.lstrip(" \t\f").startswith("//"):
+                # Комментарий — авторский текст, включая код, закомментированный
+                # вручную; его содержимое и исходный отступ не форматируются.
+                self.result.append(line)
+            elif number in region_lines:
+                self._region_line(line)
+            elif number in conditional_lines:
+                self._conditional_line(line, conditional_lines[number])
+            elif self.pending_header is not None:
+                self._pending_header_line(line, code)
+            else:
+                self._statement_line(line, code, number)
+        self._finish()
+        spaced = _space_binary_operators("".join(self.result))
+        return _normalize_horizontal_whitespace(spaced)
+
+    # Состояние
+
+    def _snapshot(self) -> _FormatState:
         return _FormatState(
-            blocks=_copy_stack(stack),
-            brackets=tuple(brackets),
-            operator_continuation=operator_continuation,
-            continuation_depth=continuation_depth,
-            pending_header=pending_header,
+            blocks=_copy_stack(self.stack),
+            brackets=tuple(self.brackets),
+            operator_continuation=self.operator_continuation,
+            continuation_depth=self.continuation_depth,
+            pending_header=self.pending_header,
         )
 
-    def push(block: _Block) -> None:
-        if max_depth is not None and len(stack) >= max_depth:
-            raise FormatError(f"вложенность блоков больше {max_depth}")
-        stack.append(block)
+    def _restore(self, state: _FormatState) -> None:
+        self.stack = _copy_stack(state.blocks)
+        self.brackets[:] = state.brackets
+        self.operator_continuation = state.operator_continuation
+        self.continuation_depth = state.continuation_depth
+        self.pending_header = state.pending_header
 
-    def complete_pending_header(header_kind: str) -> None:
-        if brackets:
+    def _push(self, block: _Block) -> None:
+        if self.max_depth is not None and len(self.stack) >= self.max_depth:
+            raise FormatError(f"вложенность блоков больше {self.max_depth}")
+        self.stack.append(block)
+
+    def _complete_pending_header(self, header_kind: str) -> None:
+        if self.brackets:
             raise FormatError("незакрытые скобки в условии")
-        if header_kind == "Если":
-            push(_Block("Если", line=cursor.line))
-        elif header_kind == "ИначеЕсли":
-            if not stack or stack[-1].opener != "Если":
+        if header_kind == "ИначеЕсли":
+            if not self.stack or self.stack[-1].opener != "Если":
                 raise FormatError("ИначеЕсли вне блока Если")
-            stack[-1].branch = "ИначеЕсли"
+            self.stack[-1].branch = "ИначеЕсли"
         else:
-            push(_Block(header_kind, line=cursor.line))
+            self._push(_Block(header_kind, line=self.cursor.line))
 
-    for number, (line, code) in enumerate(zip(lines, code_lines)):
-        cursor.line = number + 1
-        while string_index < len(strings) and strings[string_index][1] <= offset:
-            string_index += 1
-        inside_string = (
-            string_index < len(strings)
-            and strings[string_index][0] < offset < strings[string_index][1]
+    def _literal_starts_between(self, start: int, end: int) -> bool:
+        position = bisect_left(self.literal_starts, start)
+        return (
+            position < len(self.literal_starts)
+            and self.literal_starts[position] < end
         )
-        offset += len(line)
-        if number in opaque_lines:
-            result.append(line)
-            continue
-        if inside_string:
-            string_end = strings[string_index][1]
-            line_start = offset - len(line)
-            suffix_start = string_end - line_start
-            suffix = code[suffix_start:]
-            if _line_keywords(suffix):
+
+    def _advance(self, line: str) -> bool:
+        """Сдвинуть позицию на строку; вернуть, начата ли она внутри литерала."""
+        strings = self.strings
+        while (
+            self.string_index < len(strings)
+            and strings[self.string_index][1] <= self.offset
+        ):
+            self.string_index += 1
+        inside_string = (
+            self.string_index < len(strings)
+            and strings[self.string_index][0] < self.offset < strings[self.string_index][1]
+        )
+        self.offset += len(line)
+        return inside_string
+
+    # Виды строк
+
+    def _string_tail_line(self, line: str, code: str) -> None:
+        """Строка, начатая внутри многострочного литерала: только учёт состояния."""
+        string_end = self.strings[self.string_index][1]
+        line_start = self.offset - len(line)
+        suffix_start = string_end - line_start
+        suffix = code[suffix_start:]
+        if _line_keywords(suffix):
+            raise FormatError(
+                "структурный код после многострочной строки не поддерживается"
+            )
+        _scan_brackets(suffix, self.brackets)
+        trailing_operator = _TRAILING_OPERATOR.search(suffix)
+        string_follows = False
+        if trailing_operator:
+            operator_position = line_start + suffix_start + trailing_operator.start()
+            string_follows = self._literal_starts_between(operator_position, self.offset)
+        self.operator_continuation = bool(trailing_operator) and not string_follows
+        if self.brackets or self.operator_continuation:
+            if self.continuation_depth is None:
+                self.continuation_depth = len(self.stack)
+        else:
+            self.continuation_depth = None
+        if self.pending_header is not None:
+            header_kind, _ = self.pending_header
+            if _header_terminator_end(header_kind, suffix) is not None:
+                self._complete_pending_header(header_kind)
+                self.pending_header = None
+                if not self.brackets and not self.operator_continuation:
+                    self.continuation_depth = None
+        self.result.append(line)
+
+    def _region_line(self, line: str) -> None:
+        if self.brackets or self.operator_continuation or self.pending_header is not None:
+            raise FormatError("область внутри незавершённого выражения или условия")
+        self.result.append(line)
+
+    def _conditional_line(self, line: str, kind: str) -> None:
+        if kind == "если":
+            self.conditionals.append(_Conditional(self._snapshot(), []))
+        elif kind in {"иначеесли", "иначе"}:
+            if not self.conditionals:
+                raise FormatError(f"#{kind} вне условной ветви")
+            context = self.conditionals[-1]
+            context.branch_ends.append(self._snapshot())
+            self._restore(context.baseline)
+            if kind == "иначе":
+                context.has_else = True
+        else:
+            if not self.conditionals:
+                raise FormatError("#КонецЕсли без #Если")
+            context = self.conditionals.pop()
+            context.branch_ends.append(self._snapshot())
+            branch_ends = context.branch_ends
+            if not context.has_else:
+                branch_ends.append(context.baseline)
+            if any(branch != branch_ends[0] for branch in branch_ends[1:]):
                 raise FormatError(
-                    "структурный код после многострочной строки не поддерживается"
+                    "ветви #Если завершаются разным структурным состоянием"
                 )
-            _scan_brackets(suffix, brackets)
-            trailing_operator = re.search(
-                r"(?:[+*/=<>,.-]|\b(?:И|ИЛИ|НЕ)\b)\s*$", suffix, re.IGNORECASE
-            )
-            string_follows = False
-            if trailing_operator:
-                operator_position = line_start + suffix_start + trailing_operator.start()
-                string_follows = literal_starts_between(operator_position, offset)
-            operator_continuation = bool(trailing_operator) and not string_follows
-            if brackets or operator_continuation:
-                if continuation_depth is None:
-                    continuation_depth = len(stack)
-            else:
-                continuation_depth = None
-            if pending_header is not None:
-                header_kind, _ = pending_header
-                header_complete = (
-                    header_kind in {"Если", "ИначеЕсли"}
-                    and _has_then(suffix)
-                ) or (
-                    header_kind in {"Для", "Пока"}
-                    and _has_loop_terminator(suffix)
-                )
-                if header_complete:
-                    complete_pending_header(header_kind)
-                    pending_header = None
-                    if not brackets and not operator_continuation:
-                        continuation_depth = None
-            result.append(line)
-            continue
-        if not line.strip(" \t\f\r\n"):
-            result.append(line)
-            continue
-        # Комментарий — авторский текст, включая код, закомментированный
-        # вручную; его содержимое и исходный отступ не форматируются.
-        if line.lstrip(" \t\f").startswith("//"):
-            result.append(line)
-            continue
-        if number in region_lines:
-            if brackets or operator_continuation or pending_header is not None:
-                raise FormatError("область внутри незавершённого выражения или условия")
-            result.append(line)
-            continue
-        if number in conditional_lines:
-            kind = conditional_lines[number]
-            if kind == "если":
-                conditionals.append(_Conditional(snapshot_state(), []))
-            elif kind in {"иначеесли", "иначе"}:
-                if not conditionals:
-                    raise FormatError(f"#{kind} вне условной ветви")
-                context = conditionals[-1]
-                context.branch_ends.append(snapshot_state())
-                baseline = context.baseline
-                stack = _copy_stack(baseline.blocks)
-                brackets[:] = baseline.brackets
-                operator_continuation = baseline.operator_continuation
-                continuation_depth = baseline.continuation_depth
-                pending_header = baseline.pending_header
-                if kind == "иначе":
-                    context.has_else = True
-            else:
-                if not conditionals:
-                    raise FormatError("#КонецЕсли без #Если")
-                context = conditionals.pop()
-                context.branch_ends.append(snapshot_state())
-                branch_ends = context.branch_ends
-                if not context.has_else:
-                    branch_ends.append(context.baseline)
-                if any(branch != branch_ends[0] for branch in branch_ends[1:]):
-                    raise FormatError(
-                        "ветви #Если завершаются разным структурным состоянием"
-                    )
-                merged = branch_ends[0]
-                stack = _copy_stack(merged.blocks)
-                brackets[:] = merged.brackets
-                operator_continuation = merged.operator_continuation
-                continuation_depth = merged.continuation_depth
-                pending_header = merged.pending_header
-            result.append(line)
-            continue
+            self._restore(branch_ends[0])
+        self.result.append(line)
 
-        if pending_header is not None:
-            header_kind, header_depth = pending_header
-            keywords = _line_keywords(code)
-            terminator_end = _header_terminator_end(header_kind, code)
-            inline_close = False
-            if keywords:
-                inline_close = (
-                    terminator_end is not None
-                    and len(keywords) == 1
-                    and keywords[0][0] == _OPEN[header_kind]
-                    and keywords[0][1] >= terminator_end
-                )
-                if not inline_close:
-                    raise FormatError(
-                        "структурное слово внутри многострочного условия"
-                    )
-            _scan_brackets(code, brackets)
-            leading = len(line) - len(line.lstrip(" \t\f"))
-            result.append("\t" * header_depth + line[leading:])
-            header_complete = (
-                header_kind in {"Если", "ИначеЕсли"}
-                and _has_then(code)
-            ) or (
-                header_kind in {"Для", "Пока"}
-                and _has_loop_terminator(code)
+    def _pending_header_line(self, line: str, code: str) -> None:
+        """Продолжение многострочного заголовка Если/ИначеЕсли/Для/Пока."""
+        header_kind, header_depth = self.pending_header
+        keywords = _line_keywords(code)
+        terminator_end = _header_terminator_end(header_kind, code)
+        inline_close = False
+        if keywords:
+            inline_close = (
+                terminator_end is not None
+                and len(keywords) == 1
+                and keywords[0][0] == _OPEN[header_kind]
+                and keywords[0][1] >= terminator_end
             )
-            if header_complete:
-                complete_pending_header(header_kind)
-                pending_header = None
-                if inline_close:
-                    if not stack or _OPEN[stack[-1].opener] != keywords[0][0]:
-                        raise FormatError(
-                            f"несогласованное завершение блока: {keywords[0][0]}"
-                        )
-                    stack.pop()
-                if not brackets and not operator_continuation:
-                    continuation_depth = None
-            continue
+            if not inline_close:
+                raise FormatError(
+                    "структурное слово внутри многострочного условия"
+                )
+        _scan_brackets(code, self.brackets)
+        self.result.append(_reindent(line, header_depth))
+        if terminator_end is not None:
+            self._complete_pending_header(header_kind)
+            self.pending_header = None
+            if inline_close:
+                if not self.stack or _OPEN[self.stack[-1].opener] != keywords[0][0]:
+                    raise FormatError(
+                        f"несогласованное завершение блока: {keywords[0][0]}"
+                    )
+                self.stack.pop()
+            if not self.brackets and not self.operator_continuation:
+                self.continuation_depth = None
 
-        was_continuation = bool(brackets) or operator_continuation
-        _scan_brackets(code, brackets)
+    def _statement_line(self, line: str, code: str, number: int) -> None:
+        was_continuation = bool(self.brackets) or self.operator_continuation
+        _scan_brackets(code, self.brackets)
         keywords = _line_keywords(code)
         first_keyword = keywords[0][0] if keywords else ""
         starts_multiline_condition = (
@@ -657,22 +684,19 @@ def _format_lines(source: str, max_depth: int | None, cursor: _Position) -> str:
             first_keyword in {"Процедура", "Функция"}
             and len(keywords) == 1
             and not was_continuation
-            and bool(brackets)
+            and bool(self.brackets)
         )
-        trailing_operator = re.search(
-            r"(?:[+*/=<>,.-]|\b(?:И|ИЛИ|НЕ)\b)\s*$", code, re.IGNORECASE
-        )
+        trailing_operator = _TRAILING_OPERATOR.search(code)
         if starts_multiline_condition or starts_multiline_loop:
             trailing_operator = None
         if trailing_operator:
-            line_start = offset - len(line)
-            string_follows = literal_starts_between(
-                line_start + trailing_operator.start(), offset
-            )
-            if string_follows:
+            line_start = self.offset - len(line)
+            if self._literal_starts_between(
+                line_start + trailing_operator.start(), self.offset
+            ):
                 trailing_operator = None
         is_continuation = (
-            was_continuation or bool(brackets) or bool(trailing_operator)
+            was_continuation or bool(self.brackets) or bool(trailing_operator)
         ) and not (
             starts_multiline_condition
             or starts_multiline_loop
@@ -680,7 +704,7 @@ def _format_lines(source: str, max_depth: int | None, cursor: _Position) -> str:
         )
         starts_branch_call = (
             not was_continuation
-            and bool(brackets)
+            and bool(self.brackets)
             and len(keywords) == 1
             and keywords[0][0] in _BRANCH
             and not line[:keywords[0][1]].strip(" \t\f")
@@ -688,46 +712,55 @@ def _format_lines(source: str, max_depth: int | None, cursor: _Position) -> str:
         if starts_branch_call:
             is_continuation = False
         if is_continuation:
-            if keywords:
-                raise FormatError("структурное слово внутри продолжения выражения")
-            if not was_continuation:
-                continuation_depth = len(stack)
-            if continuation_depth is None:
-                raise FormatError("неизвестный уровень продолжения выражения")
-            leading = len(line) - len(line.lstrip(" \t\f"))
-            result.append("\t" * continuation_depth + line[leading:])
-            operator_continuation = bool(trailing_operator) and not brackets
-            if not brackets and not operator_continuation:
-                continuation_depth = None
-            continue
+            self._continuation_line(line, keywords, was_continuation, trailing_operator)
+            return
 
-        first = keywords[0][0] if keywords else ""
-        dedent_branch = first in _CLOSE or first in _BRANCH
-        depth = len(stack) - dedent_branch
-        if stack or keywords:
-            leading = len(line) - len(line.lstrip(" \t\f"))
-            result.append("\t" * depth + line[leading:])
+        dedent_branch = first_keyword in _CLOSE or first_keyword in _BRANCH
+        depth = len(self.stack) - dedent_branch
+        if self.stack or keywords:
+            self.result.append(_reindent(line, depth))
         else:
-            result.append(line)
+            self.result.append(line)
 
         if starts_multiline_declaration:
-            continuation_depth = depth + 1
+            self.continuation_depth = depth + 1
+        self._apply_keywords(code, keywords, depth, number)
+        if starts_branch_call and self.brackets:
+            self.continuation_depth = len(self.stack)
+
+    def _continuation_line(
+        self, line: str, keywords, was_continuation: bool, trailing_operator
+    ) -> None:
+        if keywords:
+            raise FormatError("структурное слово внутри продолжения выражения")
+        if not was_continuation:
+            self.continuation_depth = len(self.stack)
+        if self.continuation_depth is None:
+            raise FormatError("неизвестный уровень продолжения выражения")
+        self.result.append(_reindent(line, self.continuation_depth))
+        self.operator_continuation = bool(trailing_operator) and not self.brackets
+        if not self.brackets and not self.operator_continuation:
+            self.continuation_depth = None
+
+    def _apply_keywords(self, code: str, keywords, depth: int, number: int) -> None:
+        """Изменить стек блоков по структурным словам строки."""
+        stack = self.stack
         for keyword, position in keywords:
             if keyword in _OPEN:
                 header = code[position:]
                 if keyword == "Если" and not _has_then(header):
                     if len(keywords) != 1:
                         raise FormatError("условие и другие операторы в одной строке")
-                    pending_header = ("Если", depth)
-                    break
+                    self.pending_header = ("Если", depth)
+                    return
                 if keyword in {"Для", "Пока"} and not _has_loop_terminator(header):
                     if len(keywords) != 1:
                         raise FormatError("условие цикла и другие операторы в одной строке")
-                    pending_header = (keyword, depth)
-                    break
+                    self.pending_header = (keyword, depth)
+                    return
                 if keyword in {"Процедура", "Функция"} and stack:
                     raise FormatError("вложенное объявление пока не поддерживается")
-                push(_Block(keyword, line=number + 1))
+                self._push(_Block(keyword, line=number + 1))
             elif keyword in _BRANCH and keyword != "Иначе":
                 if not stack or stack[-1].opener != _BRANCH[keyword]:
                     raise FormatError(f"ветвь вне блока: {keyword}")
@@ -740,8 +773,8 @@ def _format_lines(source: str, max_depth: int | None, cursor: _Position) -> str:
                         raise FormatError("условие и другие операторы в одной строке")
                     if stack[-1].branch in {"Иначе", "Исключение"}:
                         raise FormatError("ИначеЕсли после завершающей ветви")
-                    pending_header = ("ИначеЕсли", depth)
-                    break
+                    self.pending_header = ("ИначеЕсли", depth)
+                    return
                 stack[-1].branch = keyword
             elif keyword == "Иначе":
                 if not stack or stack[-1].opener != "Если":
@@ -754,20 +787,18 @@ def _format_lines(source: str, max_depth: int | None, cursor: _Position) -> str:
                     raise FormatError(f"несогласованное завершение блока: {keyword}")
                 stack.pop()
 
-        if starts_branch_call and brackets:
-            continuation_depth = len(stack)
-
-    cursor.line = None
-    if pending_header is not None:
-        raise FormatError("незавершённое многострочное условие")
-    if brackets:
-        raise FormatError("незакрытое выражение")
-    if stack:
-        raise FormatError(f"незакрытый блок: {stack[-1].opener}", stack[-1].line)
-    if conditionals:
-        raise FormatError("незакрытая условная ветвь")
-    spaced = _space_binary_operators("".join(result))
-    return _normalize_horizontal_whitespace(spaced)
+    def _finish(self) -> None:
+        self.cursor.line = None
+        if self.pending_header is not None:
+            raise FormatError("незавершённое многострочное условие")
+        if self.brackets:
+            raise FormatError("незакрытое выражение")
+        if self.stack:
+            raise FormatError(
+                f"незакрытый блок: {self.stack[-1].opener}", self.stack[-1].line
+            )
+        if self.conditionals:
+            raise FormatError("незакрытая условная ветвь")
 
 
 def _protected_patch_lines(source: str) -> set[int]:
