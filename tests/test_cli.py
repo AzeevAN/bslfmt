@@ -61,6 +61,46 @@ class CliTests(unittest.TestCase):
                 self.assertIn(fragment, err)
                 self.assertIn("bslfmt --help", err)
 
+    def test_help_wins_over_other_arguments(self):
+        for arguments in (["-h", "--bogus"], ["--bogus", "--help"], ["-i", "-h"]):
+            with self.subTest(arguments=arguments):
+                code, out, err = run(arguments)
+                self.assertEqual((code, err), (0, ""))
+                self.assertIn("Использование: bslfmt", out)
+        # после «--» это имя файла, а не флаг
+        self.assertEqual(run(["--check", "--", "-h"])[0], 2)
+
+    def test_long_flags_are_not_abbreviated(self):
+        path = str(self.write("а.bsl", UNFORMATTED))
+        for flag in ("--in", "--che", "--vers", "--strip"):
+            with self.subTest(flag=flag):
+                code, _, err = run([flag, path])
+                self.assertEqual(code, 2)
+                self.assertIn("неизвестные аргументы", err)
+        self.assertEqual(Path(path).read_text(encoding="utf-8"), UNFORMATTED)
+
+    def test_argparse_and_os_errors_are_russian(self):
+        missing = str(self.dir / "нет.bsl")
+        for arguments, fragment in (
+            (["--output"], "аргумент --output: ожидается одно значение"),
+            ([""], "пустое имя файла"),
+            ([missing], "файл не найден"),
+            ([str(self.dir)], "это каталог"),
+        ):
+            with self.subTest(arguments=arguments):
+                code, _, err = run(arguments)
+                self.assertEqual(code, 2)
+                self.assertIn(fragment, err)
+                self.assertNotIn("argument", err)
+                self.assertNotIn("Errno", err)
+
+    def test_non_utf8_file_is_reported_in_russian(self):
+        path = self.dir / "cp1251.bsl"
+        path.write_bytes("А = 1;\n".encode("cp1251"))
+        code, _, err = run([str(path)])
+        self.assertEqual(code, 2)
+        self.assertIn("не в кодировке UTF-8", err)
+
     def test_in_place_rewrites_only_changed_files(self):
         changed = self.write("Модуль.bsl", UNFORMATTED)
         same = self.write("Готовый.bsl", FORMATTED)

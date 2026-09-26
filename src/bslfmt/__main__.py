@@ -75,6 +75,7 @@ _ARGPARSE_MESSAGES = (
     ("unrecognized arguments", "неизвестные аргументы"),
     ("expected one argument", "ожидается одно значение"),
     ("ignored explicit argument", "лишнее значение у флага"),
+    ("argument ", "аргумент "),
 )
 
 
@@ -124,12 +125,33 @@ def _read_stdin() -> str:
 def _read(name: str) -> str:
     if name == "-":
         return _read_stdin()
-    with Path(name).open("r", encoding="utf-8", newline="") as stream:
+    path = Path(name)
+    if path.is_dir():
+        # На Windows open() каталога даёт PermissionError, поэтому проверяем сами.
+        raise IsADirectoryError(f"это каталог, а не файл: {name}")
+    with path.open("r", encoding="utf-8", newline="") as stream:
         return stream.read()
 
 
 def _display_name(name: str) -> str:
     return "стандартный ввод" if name == "-" else name
+
+
+def _describe(error: BaseException) -> str:
+    """Текст ошибки по-русски; прочие ошибки — как есть.
+
+    strerror есть только у ошибок, созданных ОС: свои сообщения выводятся
+    без замены.
+    """
+    if isinstance(error, UnicodeDecodeError):
+        return f"файл не в кодировке UTF-8 (байт {error.start})"
+    if isinstance(error, FileNotFoundError) and error.strerror:
+        return "файл не найден"
+    if isinstance(error, IsADirectoryError) and error.strerror:
+        return "это каталог, а не файл"
+    if isinstance(error, PermissionError) and error.strerror:
+        return "нет доступа"
+    return str(error)
 
 
 def _version() -> str:
@@ -191,7 +213,7 @@ def _replace_file(path: Path, text: str) -> None:
 
 
 def _parse(argv: list[str] | None) -> argparse.Namespace:
-    parser = _Parser(prog="bslfmt", add_help=False)
+    parser = _Parser(prog="bslfmt", add_help=False, allow_abbrev=False)
     parser.add_argument("files", nargs="*")
     parser.add_argument("-h", "--help", action="store_true")
     parser.add_argument("--version", action="store_true")
@@ -207,6 +229,9 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
     if "--" in arguments:
         split = arguments.index("--")
         arguments, files_after_dash = arguments[:split], arguments[split + 1:]
+    # Справка — при любых других аргументах, как у обычного argparse.
+    if "-h" in arguments or "--help" in arguments:
+        return argparse.Namespace(help=True, version=False)
     # Файлы и флаги в любом порядке: «bslfmt а.bsl -i б.bsl».
     args = parser.parse_intermixed_args(arguments)
     args.files += files_after_dash
@@ -214,6 +239,8 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
         return args
     if not args.files:
         raise _UsageError("не указан файл")
+    if "" in args.files:
+        raise _UsageError("пустое имя файла")
     if args.in_place and (args.check or args.diff or args.output):
         raise _UsageError("-i нельзя вместе с --check, --diff и --output")
     if args.output and (args.check or args.diff):
@@ -280,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             result = _process(name, args)
         except (OSError, UnicodeError, LexerError, FormatError) as error:
-            _report_error(f"{_display_name(name)}: {error}")
+            _report_error(f"{_display_name(name)}: {_describe(error)}")
             result = FAILED
         except Exception as error:
             # Ошибка в самом форматтере: короткое сообщение без traceback.
