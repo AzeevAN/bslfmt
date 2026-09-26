@@ -435,8 +435,22 @@ def _format_active_code(
 
 
 _TRAILING_OPERATOR = re.compile(r"(?:[+*/%=<>,.-]|\b(?:И|ИЛИ|НЕ)\b)\s*$", re.IGNORECASE)
-# Одиночный Возврат в конце строки кода: значение — на следующей строке.
-_BARE_RETURN = re.compile(r"(?<![\w.])(?:Возврат|Return)$", re.IGNORECASE)
+
+
+def _ends_with_bare_return(code_tail: str) -> bool:
+    """Кончается ли код одиночным Возврат/Return: значение — на следующей строке.
+
+    Сравнивается только хвост: поиск регулярным выражением с «$» проходил
+    всю строку и заметно замедлял большие модули.
+    """
+    if code_tail[-1:] not in ("т", "Т", "n", "N"):
+        # Почти все строки кончаются «;» — отсекаем без сравнения слов.
+        return False
+    for word in ("возврат", "return"):
+        if code_tail[-len(word):].casefold() == word:
+            before = code_tail[-len(word) - 1:-len(word)]
+            return not before or not (before.isalnum() or before in "_.")
+    return False
 
 
 def _scan_directives(
@@ -746,7 +760,7 @@ class _LineFormatter:
             self.value_expected = False
         else:
             self.value_expected = (
-                code_tail.endswith("=") or _BARE_RETURN.search(code_tail) is not None
+                code_tail.endswith("=") or _ends_with_bare_return(code_tail)
             )
 
     # Виды строк
@@ -934,7 +948,7 @@ class _LineFormatter:
         if starts_branch_call and self.brackets:
             self.continuation_depth = len(self.stack)
         if (not self.brackets and self.pending_header is None
-                and _BARE_RETURN.search(code.rstrip(" \t\f\r\n"))):
+                and _ends_with_bare_return(code.rstrip(" \t\f\r\n"))):
             self.return_pending = True
 
     def _continuation_line(
