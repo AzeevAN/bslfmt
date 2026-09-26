@@ -947,6 +947,26 @@ class FormatterTests(unittest.TestCase):
             with self.subTest(before=before), self.assertRaises(FormatError):
                 formatter._check_significant_tokens(before, after)
 
+    def test_at_most_one_blank_line_in_a_row(self):
+        cases = (
+            ("\n\nПроцедура П()\r\n\r\n\t\r\n\r\nА=1;\r\n\r\nКонецПроцедуры\n\n\n",
+             "\nПроцедура П()\r\n\r\n\tА = 1;\r\n\r\nКонецПроцедуры\n\n"),
+            # в многострочной строке пустые строки — часть значения
+            ("Т = \"а\n\n\n|б\";\n\n\n\nБ = 1;\n", "Т = \"а\n\n\n|б\";\n\nБ = 1;\n"),
+            # содержимое пустой строки (табы конфигуратора) сохраняется
+            ("А = 1;\n\t\n\t\t\n\nБ = 1;\n", "А = 1;\n\t\nБ = 1;\n"),
+            # область расширения — дословно
+            ("Процедура П()\n#Вставка\nА=1;\n\n\n\nБ=2;\n#КонецВставки\nКонецПроцедуры\n",
+             "Процедура П()\n#Вставка\nА=1;\n\n\n\nБ=2;\n#КонецВставки\nКонецПроцедуры\n"),
+            # сразу после области — обычные пустые строки
+            ("Процедура П()\n#Вставка\nА=1;\n#КонецВставки\n\n\n\nКонецПроцедуры\n",
+             "Процедура П()\n#Вставка\nА=1;\n#КонецВставки\n\nКонецПроцедуры\n"),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(format_code(source), expected)
+                self.assertEqual(format_code(expected), expected)
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(

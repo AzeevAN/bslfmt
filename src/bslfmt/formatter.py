@@ -930,6 +930,38 @@ def _check_significant_tokens(source: str, result: str, tokens=None) -> None:
             raise FormatError("форматирование изменило значимые токены")
 
 
+# Три строки подряд, из которых две пустые (пробелы и табы допустимы) —
+# признак, что есть что схлопывать; иначе текст не разбирается повторно.
+_BLANK_RUN = re.compile(r"(?:\r\n|\r|\n)(?:[ \t\f]*(?:\r\n|\r|\n)){2}")
+
+
+def _collapse_blank_lines(text: str) -> str:
+    """Оставить не больше одной пустой строки подряд.
+
+    Пустая строка — из одних пробелов и табов; её содержимое (табы
+    конфигуратора) сохраняется, лишние удаляются. Строки внутри многострочных
+    строк и областей правки не трогаются: там пустые строки — часть текста.
+    """
+    if not _BLANK_RUN.search(text):
+        return text
+    lines = _split_lines(text)
+    interior: set[int] = set()
+    for row in _token_rows(text):
+        if row[_KIND] in {"string", "opaque"}:
+            # Строки после первой и до строки с последним символом токена.
+            later_lines = len(_split_lines(row[_TEXT])) - 1
+            interior.update(range(row[_LINE], row[_LINE] + later_lines))
+    kept: list[str] = []
+    previous_blank = False
+    for number, line in enumerate(lines):
+        blank = number not in interior and not line.strip(" \t\f\r\n")
+        if blank and previous_blank:
+            continue
+        kept.append(line)
+        previous_blank = blank
+    return "".join(kept)
+
+
 def format_code(
     source: str,
     *,
@@ -951,7 +983,7 @@ def format_code(
     # Без областей расширения токены исходника нужны дважды — в форматировании
     # и в итоговой проверке; разбираем один раз.
     tokens = None if _patch_regions(body) else _token_rows(body)
-    result = _format_with_patches(body, max_depth, tokens)
+    result = _collapse_blank_lines(_format_with_patches(body, max_depth, tokens))
     _check_significant_tokens(body, result, tokens)
     return bom + result
 
