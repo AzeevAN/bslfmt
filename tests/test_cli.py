@@ -102,6 +102,34 @@ class CliTests(unittest.TestCase):
         self.assertEqual(path.read_text(encoding="utf-8"), UNFORMATTED)
         self.assertEqual([p.name for p in self.dir.iterdir()], ["м.bsl"])
 
+    def test_in_place_refuses_read_only_file(self):
+        path = self.write("только-чтение.bsl", UNFORMATTED)
+        os.chmod(path, 0o444)
+        self.addCleanup(os.chmod, path, 0o644)
+        code, out, err = run(["-i", str(path)])
+        self.assertEqual(code, 2)
+        self.assertIn("только для чтения", err)
+        self.assertEqual(path.read_text(encoding="utf-8"), UNFORMATTED)
+        self.assertEqual([p.name for p in self.dir.iterdir()], ["только-чтение.bsl"])
+
+    def test_in_place_cleanup_failure_keeps_original_error(self):
+        path = self.write("м.bsl", UNFORMATTED)
+        with mock.patch("bslfmt.__main__.os.replace", side_effect=OSError("занят")), \
+                mock.patch("pathlib.Path.unlink", side_effect=PermissionError("нет доступа")):
+            code, _, err = run(["-i", str(path)])
+        self.assertEqual(code, 2)
+        self.assertIn("занят", err)
+        self.assertNotIn(".tmp", err)
+
+    def test_double_dash_ends_options(self):
+        path = self.write("-минус.bsl", UNFORMATTED)
+        cwd = os.getcwd()
+        os.chdir(self.dir)
+        self.addCleanup(os.chdir, cwd)
+        self.assertEqual(run(["--check", "--", "-минус.bsl"])[0], 1)
+        self.assertEqual(run(["-i", "--", "-минус.bsl"])[0], 0)
+        self.assertEqual(path.read_text(encoding="utf-8"), FORMATTED)
+
     def test_check_reports_without_writing(self):
         changed = self.write("а.bsl", UNFORMATTED)
         same = self.write("б.bsl", FORMATTED)

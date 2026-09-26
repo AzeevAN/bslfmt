@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import difflib
 import os
 import shutil
+import stat
 import sys
 import tempfile
 from importlib import metadata
@@ -23,10 +25,12 @@ HELP = """\
 
 ФАЙЛ              путь к .bsl-файлу; «-» — читать из стандартного ввода
                   (единственным файлом, не с -i)
+--                дальше только файлы (для имён, начинающихся с «-»)
 
 Режимы (без режима — отформатированный текст выводится на экран):
   -i, --in-place  переписать сами файлы. Файл без изменений не трогается,
-                  при отказе остаётся как был.
+                  при отказе остаётся как был; файл только для чтения
+                  не переписывается (ошибка, код 2).
                   Пример: bslfmt -i МодульОбъекта.bsl Форма.bsl
   --check         только проверить, ничего не записывая: какие файлы
                   нужно отформатировать.
@@ -152,9 +156,13 @@ def _replace_file(path: Path, text: str) -> None:
     """Заменить содержимое файла атомарно: временный файл рядом и os.replace.
 
     При сбое исходный файл остаётся прежним, временный удаляется. Права
-    файла сохраняются; у символической ссылки меняется цель.
+    файла сохраняются; у символической ссылки меняется цель. Файл только для
+    чтения не переписывается ни на одной ОС: на Windows замена всё равно
+    упала бы, а на POSIX молча обошла бы запрет.
     """
     target = path.resolve()
+    if not os.access(target, os.W_OK):
+        raise OSError("файл только для чтения")
     descriptor, temp_name = tempfile.mkstemp(
         dir=target.parent, prefix=f".{target.name}.", suffix=".tmp"
     )
@@ -165,7 +173,12 @@ def _replace_file(path: Path, text: str) -> None:
         shutil.copymode(target, temp)
         os.replace(temp, target)
     except BaseException:
-        temp.unlink(missing_ok=True)
+        # Уборка не должна подменять исходную ошибку: на Windows временный
+        # файл с перенесённым атрибутом «только чтение» не удаляется без chmod.
+        with contextlib.suppress(OSError):
+            os.chmod(temp, stat.S_IREAD | stat.S_IWRITE)
+        with contextlib.suppress(OSError):
+            temp.unlink(missing_ok=True)
         raise
 
 
@@ -178,8 +191,16 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--diff", action="store_true")
     parser.add_argument("--output", type=Path)
+    # «--» завершает флаги: хвост — только файлы. Разбираем сами:
+    # parse_intermixed_args до Python 3.13 не понимает «--».
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    files_after_dash: list[str] = []
+    if "--" in arguments:
+        split = arguments.index("--")
+        arguments, files_after_dash = arguments[:split], arguments[split + 1:]
     # Файлы и флаги в любом порядке: «bslfmt а.bsl -i б.bsl».
-    args = parser.parse_intermixed_args(argv)
+    args = parser.parse_intermixed_args(arguments)
+    args.files += files_after_dash
     if args.help or args.version:
         return args
     if not args.files:
