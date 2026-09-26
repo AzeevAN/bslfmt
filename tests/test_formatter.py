@@ -836,12 +836,12 @@ class FormatterTests(unittest.TestCase):
             ("А=Б+//комментарий\n", "А = Б+//комментарий\n"),
             ("А = Б +   \nВ;\n", "А = Б +\nВ;\n"),
             ("А=-1;Б=В*-Г;\n", "А = -1;Б = В * -Г;\n"),
-            ("\tА  =  Б<>В   ;  // хвост  \n", "\tА = Б <> В ; // хвост  \n"),
+            ("\tА  =  Б<>В   ;  // хвост  \n", "\tА = Б <> В; // хвост  \n"),
             ("#Если Сервер Тогда\nА=Б+В;\n#КонецЕсли\n",
              "#Если Сервер Тогда\nА = Б + В;\n#КонецЕсли\n"),
             ('С = "а"+"б";\nД=\'20200101\'+1;\n',
              'С = "а" + "б";\nД = \'20200101\' + 1;\n'),
-            ("Ф(А,Б) - (В) * Г/Д;\n", "Ф(А,Б) - (В) * Г / Д;\n"),
+            ("Ф(А,Б) - (В) * Г/Д;\n", "Ф(А, Б) - (В) * Г / Д;\n"),
         )
         for source, expected in cases:
             with self.subTest(source=source):
@@ -875,7 +875,7 @@ class FormatterTests(unittest.TestCase):
     def test_ternary_operator_is_an_operand(self):
         self.assertEqual(
             format_code("Процедура П()\nА=?(Б>1,В,Г);\nВозврат Х+?(А,1,2);\nКонецПроцедуры\n"),
-            "Процедура П()\n\tА = ?(Б > 1,В,Г);\n\tВозврат Х + ?(А,1,2);\nКонецПроцедуры\n",
+            "Процедура П()\n\tА = ?(Б > 1, В, Г);\n\tВозврат Х + ?(А, 1, 2);\nКонецПроцедуры\n",
         )
 
     def test_comment_lines_follow_next_code_indentation(self):
@@ -917,6 +917,35 @@ class FormatterTests(unittest.TestCase):
         )
         self.assertEqual(format_code(source), expected)
         self.assertEqual(format_code(expected), expected)
+
+    def test_spaces_at_commas_and_parentheses(self):
+        cases = (
+            ("Ф( 1 ,2 );", "Ф(1, 2);"),
+            ('Вставить("Режим"\t\t , Истина);', 'Вставить("Режим", Истина);'),
+            ('Ф("а",1,\'20200101\',-2);', 'Ф("а", 1, \'20200101\', -2);'),
+            ("Ф(А,,Б);", "Ф(А, , Б);"),
+            ("Ф(А,);", "Ф(А,);"),
+            ("Ф( );", "Ф();"),
+            ("Ф(А, // хвост", "Ф(А, // хвост"),
+            ("Ф(А,// хвост", "Ф(А, // хвост"),
+            ("Ф( // хвост", "Ф( // хвост"),
+            ("Если (А) И (Б) Тогда", "Если (А) И (Б) Тогда"),
+            ("А = 1 ;", "А = 1;"),
+        )
+        for line, expected in cases:
+            with self.subTest(line=line):
+                self.assertEqual(formatter._normalize_spacing(line + "\n"), expected + "\n")
+                self.assertEqual(formatter._normalize_spacing(expected + "\n"), expected + "\n")
+        self.assertEqual(
+            format_code("Процедура П()\nФ(1,\n  2 ,3\n  );\nКонецПроцедуры\n#Если Сервер Тогда // а,б\n#КонецЕсли\n"),
+            "Процедура П()\n\tФ(1,\n\t2, 3\n\t);\nКонецПроцедуры\n#Если Сервер Тогда // а,б\n#КонецЕсли\n",
+        )
+
+    def test_significant_check_splits_code_into_words_and_signs(self):
+        formatter._check_significant_tokens("Ф(Б,В);\n", "Ф(Б, В);\n")
+        for before, after in (("А Б;\n", "АБ;\n"), ("Ф(Б,В);\n", "Ф(БВ,);\n")):
+            with self.subTest(before=before), self.assertRaises(FormatError):
+                formatter._check_significant_tokens(before, after)
 
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"

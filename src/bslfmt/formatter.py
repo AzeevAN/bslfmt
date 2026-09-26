@@ -43,6 +43,9 @@ _IDENTIFIER = re.compile(r"[A-Za-zА-Яа-яЁё_][A-Za-zА-Яа-яЁё0-9_]*")
 # Поля кортежа токена (TokenRow): порядок полей Token.
 _KIND, _TEXT, _START, _END, _LINE = range(5)
 _NOT_NEWLINE = re.compile(r"[^\r\n]")
+# Запятая внутри токена кода, после которой нужен пробел: не перед «)» и не
+# в конце токена (там решает следующий токен).
+_COMMA_WITHOUT_SPACE = re.compile(r",(?!\)|$)")
 _MASKED_KINDS = frozenset({"string", "date", "comment", "opaque"})
 _OPEN = {
     "Процедура": "КонецПроцедуры",
@@ -283,9 +286,11 @@ def _normalize_spacing(source: str) -> str:
     """Нормализовать пробелы в коде вне строк, комментариев и директив.
 
     Бинарный оператор получает по пробелу с каждой стороны, лишние пробелы
-    схлопываются в один, хвостовые убираются, отступы сохраняются. Оба
-    правила — за один разбор: вставленные у оператора пробелы не соседствуют
-    с другими пробелами и не бывают отступом.
+    схлопываются в один, хвостовые убираются, отступы сохраняются. После
+    запятой — пробел (кроме конца строки и перед «)»), перед «,» «;» «)» и
+    после «(» пробелов нет (кроме «( // комментарий»). Всё — за один разбор:
+    вставленные пробелы не соседствуют с другими пробелами и не бывают
+    отступом.
     """
     tokens = _token_rows(source)
     directive_lines = _directive_line_starts(source)
@@ -299,6 +304,16 @@ def _normalize_spacing(source: str) -> str:
             if on_directive or indented[index]:
                 output.append(token[_TEXT])
             elif index < last and tokens[index + 1][_KIND] != "newline":
+                following = tokens[index + 1]
+                previous = tokens[index - 1]
+                if (following[_KIND] == "code" and following[_TEXT][0] in ",;)"
+                        and not (following[_TEXT][0] == "," and previous[_KIND] == "code"
+                                 and previous[_TEXT].endswith(","))):
+                    # Кроме пробела между запятыми пропущенного параметра: «, ,».
+                    continue
+                if (previous[_KIND] == "code" and previous[_TEXT].endswith("(")
+                        and following[_KIND] != "comment"):
+                    continue
                 output.append(" ")
             continue
         if kind == "operator" and not on_directive and _is_binary_operator(tokens, index):
@@ -306,6 +321,13 @@ def _normalize_spacing(source: str) -> str:
                 output.append(" ")
             output.append(token[_TEXT])
             if index < last and tokens[index + 1][_KIND] not in {"whitespace", "newline"}:
+                output.append(" ")
+            continue
+        if kind == "code" and "," in token[_TEXT] and not on_directive:
+            text = _COMMA_WITHOUT_SPACE.sub(", ", token[_TEXT])
+            output.append(text)
+            if (text.endswith(",") and index < last
+                    and tokens[index + 1][_KIND] not in {"whitespace", "newline"}):
                 output.append(" ")
             continue
         output.append(token[_TEXT])
@@ -823,11 +845,52 @@ def _protected_patch_lines(source: str) -> set[int]:
     return protected
 
 
-def _significant_tokens(source: str) -> list:
-    return [
-        token for token in _token_rows(source)
-        if token[_KIND] not in {"whitespace", "newline"}
-    ]
+# Единица сравнения внутри токена кода: слово или отдельный знак. Пробел,
+# вставленный после запятой, делит токен кода, но не меняет единиц; а
+# пропавший пробел между словами («А Б» → «АБ») меняет.
+_CODE_UNIT = re.compile(r"\w+|\W")
+
+
+def _is_word_char(char: str) -> bool:
+    return char.isalnum() or char == "_"
+
+
+def _significant_signature(rows) -> str:
+    """Значимый текст одной строкой — быстрый эквивалент _significant_units.
+
+    Соседние токены кода склеиваются; разделитель ставится, только если на
+    стыке буквы или цифры с обеих сторон («А Б» ≠ «АБ», «Б, В» = «Б,В»).
+    Остальные токены — с видом и границами.
+    """
+    parts: list[str] = []
+    previous_code = ""
+    for row in rows:
+        kind = row[_KIND]
+        if kind == "whitespace" or kind == "newline":
+            continue
+        text = row[_TEXT]
+        if kind == "code":
+            if previous_code and _is_word_char(previous_code[-1]) and _is_word_char(text[0]):
+                parts.append("\x00")
+            parts.append(text)
+            previous_code = text
+        else:
+            parts.append(f"\x01{kind}\x02{text}\x03")
+            previous_code = ""
+    return "".join(parts)
+
+
+def _significant_units(rows) -> list[tuple[str, str, int]]:
+    units = []
+    for row in rows:
+        kind = row[_KIND]
+        if kind == "whitespace" or kind == "newline":
+            continue
+        if kind == "code":
+            units.extend(("code", unit, row[_LINE]) for unit in _CODE_UNIT.findall(row[_TEXT]))
+        else:
+            units.append((kind, row[_TEXT], row[_LINE]))
+    return units
 
 
 def _check_significant_tokens(source: str, result: str, tokens=None) -> None:
@@ -847,17 +910,22 @@ def _check_significant_tokens(source: str, result: str, tokens=None) -> None:
     for number, (before_view, after_view) in enumerate(zip(before_views, after_views)):
         try:
             if tokens is not None and len(before_views) == 1:
-                before = [t for t in tokens if t[_KIND] not in {"whitespace", "newline"}]
+                before_rows = tokens
             else:
-                before = _significant_tokens(before_view)
+                before_rows = _token_rows(before_view)
         except LexerError:
             if number == 0:
                 raise
             continue
-        after = _significant_tokens(after_view)
+        after_rows = _token_rows(after_view)
+        if _significant_signature(before_rows) == _significant_signature(after_rows):
+            continue
+        # Расхождение: медленное сравнение по единицам — ради номера строки.
+        before = _significant_units(before_rows)
+        after = _significant_units(after_rows)
         for old, new in zip(before, after):
-            if (old[_KIND], old[_TEXT]) != (new[_KIND], new[_TEXT]):
-                raise FormatError("форматирование изменило значимые токены", old[_LINE])
+            if old[:2] != new[:2]:
+                raise FormatError("форматирование изменило значимые токены", old[2])
         if len(before) != len(after):
             raise FormatError("форматирование изменило значимые токены")
 
