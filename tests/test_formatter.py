@@ -668,6 +668,30 @@ class FormatterTests(unittest.TestCase):
             with self.subTest(source=source):
                 self.assertEqual(format_code(source), expected)
 
+    def test_input_limits(self):
+        def nested(depth):
+            return "Если Истина Тогда\n" * depth + "КонецЕсли;\n" * depth
+
+        self.assertEqual(formatter.DEFAULT_MAX_DEPTH, 100)
+        format_code(nested(100))
+        with self.assertRaisesRegex(FormatError, "вложенность"):
+            format_code(nested(101))
+        for header in ("Пока Истина", "Если Истина\nИ Ложь"):
+            source = f"{header} Тогда\n" if header.startswith("Если") else f"{header}\nЦикл\n"
+            with self.subTest(header=header), self.assertRaisesRegex(FormatError, "вложенность"):
+                format_code(source, max_depth=0)
+        format_code(nested(300), max_depth=None)
+        with self.assertRaisesRegex(FormatError, "вложенность"):
+            format_code(nested(3), max_depth=2)
+
+        self.assertEqual(formatter.DEFAULT_MAX_CHARS, 20_000_000)
+        self.assertEqual(format_code("А=1;\n", max_chars=5), "А = 1;\n")
+        with self.assertRaisesRegex(FormatError, "размер"):
+            format_code("А=1;\n", max_chars=4)
+        with self.assertRaisesRegex(FormatError, "размер"):
+            format_code("\ufeffА=1;\n", max_chars=5)
+        format_code("А=1;\n" * 10, max_chars=None)
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(

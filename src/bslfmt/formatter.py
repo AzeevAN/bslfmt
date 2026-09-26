@@ -13,6 +13,13 @@ class FormatError(ValueError):
     """Фрагмент нельзя безопасно форматировать."""
 
 
+# Лимиты защищают от недоверенного ввода: размер результата растёт как
+# «строки × глубина», а время — линейно от размера. Значения с запасом
+# относительно реального кода; None отключает лимит.
+DEFAULT_MAX_CHARS = 20_000_000
+DEFAULT_MAX_DEPTH = 100
+
+
 _IDENTIFIER = re.compile(r"[A-Za-zА-Яа-яЁё_][A-Za-zА-Яа-яЁё0-9_]*")
 _OPEN = {
     "Процедура": "КонецПроцедуры",
@@ -357,7 +364,7 @@ def _scan_brackets(code: str, brackets: list[str]) -> None:
                 raise FormatError("несогласованные скобки")
 
 
-def _format_active_code(source: str) -> str:
+def _format_active_code(source: str, max_depth: int | None) -> str:
     """Выравнять только отступы распознанных блоков; при сомнении отказать."""
     masked, strings, literal_starts, opaque_lines = _masked_code(source)
 
@@ -435,17 +442,22 @@ def _format_active_code(source: str) -> str:
             pending_header=pending_header,
         )
 
+    def push(block: _Block) -> None:
+        if max_depth is not None and len(stack) >= max_depth:
+            raise FormatError(f"вложенность блоков больше {max_depth}")
+        stack.append(block)
+
     def complete_pending_header(header_kind: str) -> None:
         if brackets:
             raise FormatError("незакрытые скобки в условии")
         if header_kind == "Если":
-            stack.append(_Block("Если"))
+            push(_Block("Если"))
         elif header_kind == "ИначеЕсли":
             if not stack or stack[-1].opener != "Если":
                 raise FormatError("ИначеЕсли вне блока Если")
             stack[-1].branch = "ИначеЕсли"
         else:
-            stack.append(_Block(header_kind))
+            push(_Block(header_kind))
 
     for number, (line, code) in enumerate(zip(lines, code_lines)):
         while string_index < len(strings) and strings[string_index][1] <= offset:
@@ -673,7 +685,7 @@ def _format_active_code(source: str) -> str:
                     break
                 if keyword in {"Процедура", "Функция"} and stack:
                     raise FormatError("вложенное объявление пока не поддерживается")
-                stack.append(_Block(keyword))
+                push(_Block(keyword))
             elif keyword in _BRANCH and keyword != "Иначе":
                 if not stack or stack[-1].opener != _BRANCH[keyword]:
                     raise FormatError(f"ветвь вне блока: {keyword}")
@@ -737,25 +749,36 @@ def _significant_tokens(source: str) -> list[tuple[str, str]]:
     ]
 
 
-def format_code(source: str) -> str:
-    """Форматировать активный BSL, оставляя области правки дословными."""
+def format_code(
+    source: str,
+    *,
+    max_chars: int | None = DEFAULT_MAX_CHARS,
+    max_depth: int | None = DEFAULT_MAX_DEPTH,
+) -> str:
+    """Форматировать активный BSL, оставляя области правки дословными.
+
+    max_chars ограничивает длину исходника, max_depth — вложенность блоков;
+    при превышении — FormatError. None отключает соответствующий лимит.
+    """
+    if max_chars is not None and len(source) > max_chars:
+        raise FormatError(f"размер исходника больше {max_chars} символов")
     # BOM из выгрузок 1С не входит в первую строку: иначе директива в ней
     # не распознаётся. Он возвращается в результат без изменений.
     if source.startswith("\ufeff"):
-        return "\ufeff" + format_code(source[1:])
-    result = _format_with_patches(source)
+        return "\ufeff" + format_code(source[1:], max_chars=None, max_depth=max_depth)
+    result = _format_with_patches(source, max_depth)
     # Последний рубеж: форматтер меняет только пробелы и переводы строк.
     if _significant_tokens(result) != _significant_tokens(source):
         raise FormatError("форматирование изменило значимые токены")
     return result
 
 
-def _format_with_patches(source: str) -> str:
+def _format_with_patches(source: str, max_depth: int | None) -> str:
     if not _patch_regions(source):
-        return _format_active_code(source)
+        return _format_active_code(source, max_depth)
 
     active_source, _ = _active_source(source)
-    formatted = _format_active_code(active_source)
+    formatted = _format_active_code(active_source, max_depth)
     source_lines = _split_lines(source)
     formatted_lines = _split_lines(formatted)
     if len(source_lines) != len(formatted_lines):
