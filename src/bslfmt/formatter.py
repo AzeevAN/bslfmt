@@ -464,6 +464,9 @@ class _LineFormatter:
         self.continuation_depth: int | None = None
         self.pending_header: tuple[str, int] | None = None
         self.result: list[str] = []
+        # Строки-комментарии, ждущие отступа следующей строки кода.
+        self.pending_comments: list[int] = []
+        self.last_dedent = False
         self.offset = 0
         self.string_index = 0
 
@@ -473,25 +476,54 @@ class _LineFormatter:
             self.cursor.line = number + 1
             inside_string = self._advance(line)
             if number in self.opaque_lines:
+                self.pending_comments.clear()
                 self.result.append(line)
             elif inside_string:
+                self.pending_comments.clear()
                 self._string_tail_line(line, code)
             elif not line.strip(" \t\f\r\n"):
                 self.result.append(line)
             elif line.lstrip(" \t\f").startswith("//"):
-                # Комментарий — авторский текст, включая код, закомментированный
-                # вручную; его содержимое и исходный отступ не форматируются.
+                # Содержимое комментария не форматируется; отступ берётся у
+                # следующей строки кода (std456 п.7.3). Комментарий в колонке 0
+                # остаётся там: маркеры доработок (//!, //++, //{{) и код,
+                # закомментированный конфигуратором (Ctrl+/).
+                if not line.startswith("//"):
+                    self.pending_comments.append(len(self.result))
                 self.result.append(line)
             elif number in region_lines:
+                self.pending_comments.clear()
                 self._region_line(line)
             elif number in conditional_lines:
+                self.pending_comments.clear()
                 self._conditional_line(line, conditional_lines[number])
-            elif self.pending_header is not None:
-                self._pending_header_line(line, code)
             else:
-                self._statement_line(line, code, number)
+                code_index = len(self.result)
+                self.last_dedent = False
+                if self.pending_header is not None:
+                    self._pending_header_line(line, code)
+                else:
+                    self._statement_line(line, code, number)
+                self._place_comments(self.result[code_index])
         self._finish()
         return _normalize_spacing("".join(self.result))
+
+    def _place_comments(self, code_line: str) -> None:
+        """Поставить ждущие комментарии на отступ строки кода после них.
+
+        Перед строкой, закрывающей блок или открывающей ветвь (КонецЕсли,
+        Иначе…), комментарий относится к коду внутреннего блока — на уровень
+        глубже.
+        """
+        if not self.pending_comments:
+            return
+        leading = code_line[:len(code_line) - len(code_line.lstrip(" \t\f"))]
+        if self.last_dedent:
+            leading += "\t"
+        for index in self.pending_comments:
+            comment = self.result[index]
+            self.result[index] = leading + comment.lstrip(" \t\f")
+        self.pending_comments.clear()
 
     # Состояние
 
@@ -693,6 +725,7 @@ class _LineFormatter:
 
         dedent_branch = first_keyword in _CLOSE or first_keyword in _BRANCH
         depth = len(self.stack) - dedent_branch
+        self.last_dedent = dedent_branch and bool(self.stack)
         if self.stack or keywords:
             self.result.append(_reindent(line, depth))
         else:
