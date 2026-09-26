@@ -860,6 +860,18 @@ class FormatterTests(unittest.TestCase):
             self.assertEqual(format_code(source), "Процедура П()\n\tА = 1;\nКонецПроцедуры\n")
         self.assertEqual(calls.count(source), 1)
 
+    def test_remainder_operator_is_spaced_like_multiplication(self):
+        self.assertEqual(format_code("Процедура П()\nА=Б%2;\nКонецПроцедуры\n"),
+                         "Процедура П()\n\tА = Б % 2;\nКонецПроцедуры\n")
+        for source in (
+            "Процедура П()\nА = Б *\nВ;\nКонецПроцедуры\n",
+            "Процедура П()\nЕсли А *\nБ Тогда\nВ = 1;\nКонецЕсли;\nКонецПроцедуры\n",
+            "Процедура П()\nА=-Б*-2;\nКонецПроцедуры\n",
+        ):
+            with self.subTest(source=source):
+                self.assertEqual(format_code(source.replace("*", "%")),
+                                 format_code(source).replace("*", "%"))
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(

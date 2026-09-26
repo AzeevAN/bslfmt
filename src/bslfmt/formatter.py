@@ -375,7 +375,7 @@ def _format_active_code(source: str, max_depth: int | None, tokens=None) -> str:
         raise
 
 
-_TRAILING_OPERATOR = re.compile(r"(?:[+*/=<>,.-]|\b(?:И|ИЛИ|НЕ)\b)\s*$", re.IGNORECASE)
+_TRAILING_OPERATOR = re.compile(r"(?:[+*/%=<>,.-]|\b(?:И|ИЛИ|НЕ)\b)\s*$", re.IGNORECASE)
 
 
 def _scan_directives(

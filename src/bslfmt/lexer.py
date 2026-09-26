@@ -245,8 +245,8 @@ _SIMPLE_TOKEN = re.compile(
     r"(?P<whitespace>[ \t\f]+)"
     r"|(?P<newline>\r\n|\r|\n)"
     r"|(?P<comment>//[^\r\n]*)"
-    r"|(?P<operator>>=|<=|<>|[-+*/=<>])"
-    r"|(?P<code>[^ \t\f\r\n\"'+*/=<>-]+)"
+    r"|(?P<operator>>=|<=|<>|[-+*/%=<>])"
+    r"|(?P<code>[^ \t\f\r\n\"'+*/%=<>-]+)"
 )
 _STRING_RUN = re.compile(r'[^"\r\n]*')
 _STRING_COMMENT_LINE = re.compile(r"[ \t\f]*//[^\r\n]*")

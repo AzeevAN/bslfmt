@@ -181,6 +181,12 @@ class LexerTests(unittest.TestCase):
             [("whitespace", "\ufeff"), ("whitespace", "\t"), ("code", "А")],
         )
 
+    def test_remainder_operator_is_an_operator(self):
+        self.assertEqual(
+            [(token.kind, token.text) for token in lex("А%Б")],
+            [("code", "А"), ("operator", "%"), ("code", "Б")],
+        )
+
     def test_positions_in_multiline_string_with_comment_line_and_cr(self):
         source = 'А = "x""y\r|z\r// "кавычка\r|w";\rБ'
         self.assertEqual(
