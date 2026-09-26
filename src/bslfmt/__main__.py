@@ -14,6 +14,8 @@ from .lexer import LexerError, _split_lines
 def _read_stdin() -> str:
     # Байты UTF-8, а не текстовый поток: иначе на Windows действуют кодировка
     # локали и замена CRLF на LF.
+    if sys.stdin is None:
+        raise OSError("стандартный ввод недоступен")
     buffer = getattr(sys.stdin, "buffer", None)
     if buffer is None:
         return sys.stdin.read()
@@ -22,6 +24,8 @@ def _read_stdin() -> str:
 
 def _write_stdout(text: str) -> None:
     # Байты UTF-8 без перевода \n в \r\n, который делает stdout на Windows.
+    if sys.stdout is None:
+        raise OSError("стандартный вывод недоступен")
     buffer = getattr(sys.stdout, "buffer", None)
     if buffer is None:
         sys.stdout.write(text)

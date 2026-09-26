@@ -847,12 +847,13 @@ def format_code(
     if max_chars is not None and len(source) > max_chars:
         raise FormatError(f"размер исходника больше {max_chars} символов")
     # BOM из выгрузок 1С не входит в первую строку: иначе директива в ней
-    # не распознаётся. Он возвращается в результат без изменений.
-    if source.startswith("\ufeff"):
-        return "\ufeff" + format_code(source[1:], max_chars=None, max_depth=max_depth)
-    result = _format_with_patches(source, max_depth)
-    _check_significant_tokens(source, result)
-    return result
+    # не распознаётся. Все ведущие BOM снимаются разом (без рекурсии) и
+    # возвращаются в результат без изменений.
+    body = source.lstrip("\ufeff")
+    bom = source[:len(source) - len(body)]
+    result = _format_with_patches(body, max_depth)
+    _check_significant_tokens(body, result)
+    return bom + result
 
 
 def _format_with_patches(source: str, max_depth: int | None) -> str:

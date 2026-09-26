@@ -761,6 +761,10 @@ class FormatterTests(unittest.TestCase):
                 self.assertEqual(caught.exception.line, line)
                 self.assertIn(text, str(caught.exception))
 
+    def test_many_leading_byte_order_marks_do_not_recurse(self):
+        source = "\ufeff" * 5000 + "А=1;\n"
+        self.assertEqual(format_code(source), "\ufeff" * 5000 + "А = 1;\n")
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(
@@ -1022,6 +1026,16 @@ class FormatterTests(unittest.TestCase):
             self.assertEqual(main(["-"]), 3)
         self.assertIn("внутренняя ошибка", stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_cli_missing_standard_streams_are_input_output_errors(self):
+        for stream in ("sys.stdin", "sys.stdout"):
+            stderr = StringIO()
+            with self.subTest(stream=stream), mock.patch(stream, None), \
+                    mock.patch("sys.stdin" if stream == "sys.stdout" else "sys.stdout",
+                               StringIO("А = 1;\n")), \
+                    redirect_stderr(stderr):
+                self.assertEqual(main(["-"]), 2)
+            self.assertIn("недоступен", stderr.getvalue())
 
 if __name__ == "__main__":
     unittest.main()
