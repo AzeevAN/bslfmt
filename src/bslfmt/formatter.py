@@ -498,6 +498,17 @@ def _lead_width(line: str) -> int:
     return width
 
 
+def _continuation_indent(line: str, depth: int) -> str:
+    """Отступ строки продолжения: не меньше depth, более глубокий — как был.
+
+    std444: стандартный отступ или выравнивание по первому операнду или
+    параметру; выравнивание, которое глубже стандартного, сохраняется.
+    """
+    if _lead_width(line) > depth * 4:
+        return line
+    return _reindent(line, depth)
+
+
 def _reindent(line: str, depth: int) -> str:
     leading = len(line) - len(line.lstrip(" \t\f"))
     return "\t" * depth + line[leading:]
@@ -526,6 +537,8 @@ class _LineFormatter:
         # На сколько колонок сдвинулась строка, где начался литерал: строки «|»
         # многострочного литерала сдвигаются так же.
         self.literal_delta = 0
+        # Последний значимый знак предыдущей строки кода (для «=» в конце).
+        self.previous_code_end = ""
         # Строки-комментарии, ждущие отступа следующей строки кода.
         self.pending_comments: list[int] = []
         self.last_dedent = False
@@ -569,6 +582,9 @@ class _LineFormatter:
                 self._place_comments(self.result[code_index])
             if not inside_string:
                 self.literal_delta = _lead_width(self.result[-1]) - _lead_width(line)
+            code_tail = code.rstrip(" \t\f\r\n")
+            if code_tail:
+                self.previous_code_end = code_tail[-1]
         self._finish()
         return _normalize_spacing("".join(self.result), collapse_blank_lines)
 
@@ -810,7 +826,7 @@ class _LineFormatter:
         self.result.append(_reindent(line, depth))
 
         if starts_multiline_declaration:
-            self.continuation_depth = depth + 1
+            self.continuation_depth = depth
         self._apply_keywords(code, keywords, depth, number)
         if starts_branch_call and self.brackets:
             self.continuation_depth = len(self.stack)
@@ -824,7 +840,18 @@ class _LineFormatter:
             self.continuation_depth = len(self.stack)
         if self.continuation_depth is None:
             raise FormatError("неизвестный уровень продолжения выражения")
-        self.result.append(_reindent(line, self.continuation_depth))
+        if was_continuation:
+            # Закрывающая скобка на своей строке и текст запроса сразу после
+            # «=» — на уровне инструкции (так в типовых и в примере std437).
+            body = line.lstrip(" \t\f")
+            same_level = body.startswith(")") or (
+                body.startswith('"') and self.previous_code_end == "="
+            )
+            depth = self.continuation_depth + (0 if same_level else 1)
+            self.result.append(_continuation_indent(line, depth))
+        else:
+            # Первая строка многострочной инструкции — на уровне инструкции.
+            self.result.append(_reindent(line, self.continuation_depth))
         self.operator_continuation = bool(trailing_operator) and not self.brackets
         if not self.brackets and not self.operator_continuation:
             self.continuation_depth = None
