@@ -715,6 +715,51 @@ class FormatterTests(unittest.TestCase):
             format_code('А = 1;\nБ = "без конца\n')
         self.assertEqual((caught.exception.line, caught.exception.column), (2, 5))
 
+    def test_directives_with_trailing_text_and_english_patch_forms(self):
+        for opening, closing in (
+            ("#Вставка // причина правки", "#КонецВставки // конец"),
+            ("#Insert", "#EndInsert"),
+            ("# Вставка", "#  КонецВставки"),
+            ("#Delete // лишнее", "#EndDelete"),
+            ("#Удаление", "#КонецУдаления // конец"),
+        ):
+            source = (
+                "Процедура П()\n"
+                f"{opening}\n"
+                "   Х=1;\n"
+                f"{closing}\n"
+                "Сообщить(2);\n"
+                "КонецПроцедуры\n"
+            )
+            expected = (
+                "Процедура П()\n"
+                f"{opening}\n"
+                "   Х=1;\n"
+                f"{closing}\n"
+                "\tСообщить(2);\n"
+                "КонецПроцедуры\n"
+            )
+            with self.subTest(opening=opening):
+                self.assertEqual(format_code(source), expected)
+        source = "#Область Р // пояснение\nПроцедура П()\nА=1;\nКонецПроцедуры\n#КонецОбласти // Р\n"
+        expected = "#Область Р // пояснение\nПроцедура П()\n\tА = 1;\nКонецПроцедуры\n#КонецОбласти // Р\n"
+        self.assertEqual(format_code(source), expected)
+
+    def test_unknown_or_unpaired_directive_fails_closed(self):
+        cases = (
+            ("#Использовать json\nА = 1;\n", 1, "#Использовать"),
+            ("А = 1;\n#Хрень\n", 2, "#Хрень"),
+            ("А = 1;\n#\n", 2, "без имени"),
+            ("А = 1;\n#КонецВставки\n", 2, "#КонецВставки"),
+            ("А = 1;\n#EndDelete\n", 2, "#EndDelete"),
+        )
+        for source, line, text in cases:
+            with self.subTest(source=source):
+                with self.assertRaises(FormatError) as caught:
+                    format_code(source)
+                self.assertEqual(caught.exception.line, line)
+                self.assertIn(text, str(caught.exception))
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(

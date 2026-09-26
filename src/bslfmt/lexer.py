@@ -32,12 +32,32 @@ class LexerError(ValueError):
         super().__init__(message)
 
 
+# Директивы расширений (8.3.16+), русские и английские формы по грамматике
+# 1c-syntax/bsl-parser: имя -> вид области.
 _PATCH_OPEN = {
-    "вставка": "конецвставки",
-    "удаление": "конецудаления",
+    "вставка": "вставка",
+    "insert": "вставка",
+    "удаление": "удаление",
+    "delete": "удаление",
 }
-_PATCH_CLOSE = {value: key for key, value in _PATCH_OPEN.items()}
+_PATCH_CLOSE = {
+    "конецвставки": "вставка",
+    "endinsert": "вставка",
+    "конецудаления": "удаление",
+    "enddelete": "удаление",
+}
+_DIRECTIVE = re.compile(r"[ \t\f]*#[ \t\f]*([A-Za-zА-Яа-яЁё]*)")
 _NEWLINE = re.compile(r"\r\n|\r|\n")
+
+
+def _directive_name(line: str) -> str | None:
+    """Вернуть имя директивы строки в исходном регистре.
+
+    None — строка не директива; "" — директива без имени. Текст после имени
+    (например, комментарий) допустим и не влияет на результат.
+    """
+    match = _DIRECTIVE.match(line)
+    return match.group(1) if match else None
 
 
 def _split_lines(source: str) -> list[str]:
@@ -84,22 +104,21 @@ def _patch_regions(source: str) -> list[PatchRegion]:
     regions: list[PatchRegion] = []
     index = 0
     while index < len(lines):
-        directive = lines[index][3].strip(" \t\f").casefold()
-        name = directive.removeprefix("#").strip()
-        if not directive.startswith("#") or name not in _PATCH_OPEN:
+        name = (_directive_name(lines[index][3]) or "").casefold()
+        if name not in _PATCH_OPEN:
             index += 1
             continue
 
-        closers = [_PATCH_OPEN[name]]
+        kind = _PATCH_OPEN[name]
+        closers = [kind]
         end_line = len(lines) - 1
         cursor = index + 1
         while cursor < len(lines):
-            nested = lines[cursor][3].strip(" \t\f").casefold()
-            nested_name = nested.removeprefix("#").strip()
-            if nested.startswith("#") and nested_name in _PATCH_OPEN:
+            nested_name = (_directive_name(lines[cursor][3]) or "").casefold()
+            if nested_name in _PATCH_OPEN:
                 closers.append(_PATCH_OPEN[nested_name])
-            elif nested.startswith("#") and nested_name in _PATCH_CLOSE:
-                if nested_name == closers[-1]:
+            elif nested_name in _PATCH_CLOSE:
+                if _PATCH_CLOSE[nested_name] == closers[-1]:
                     closers.pop()
                     if not closers:
                         end_line = cursor
@@ -112,7 +131,7 @@ def _patch_regions(source: str) -> list[PatchRegion]:
             else len(source)
         )
         regions.append(PatchRegion(
-            kind=name,
+            kind=kind,
             start=lines[index][0],
             end=lines[end_line][2],
             opening_end=lines[index][2],

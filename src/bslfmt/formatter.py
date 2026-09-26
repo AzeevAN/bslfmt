@@ -6,7 +6,16 @@ import re
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass, field
 
-from .lexer import _NEWLINE, _active_source, _patch_regions, _split_lines, lex
+from .lexer import (
+    _NEWLINE,
+    _PATCH_CLOSE,
+    _PATCH_OPEN,
+    _active_source,
+    _directive_name,
+    _patch_regions,
+    _split_lines,
+    lex,
+)
 
 
 class FormatError(ValueError):
@@ -402,8 +411,8 @@ def _format_lines(source: str, max_depth: int | None, cursor: _Position) -> str:
     if len(lines) != len(code_lines):
         raise FormatError("не удалось сопоставить строки")
 
-    # Проверить границы директив до форматирования: неизвестный препроцессор
-    # оставляет файл нетронутым, а непарные знакомые директивы дают отказ.
+    # Проверить границы директив до форматирования: неизвестная или непарная
+    # директива даёт отказ. Строки областей расширения здесь уже скрыты.
     region_lines: set[int] = set()
     region_stack: list[int] = []
     conditional_lines: dict[int, str] = {}
@@ -411,13 +420,12 @@ def _format_lines(source: str, max_depth: int | None, cursor: _Position) -> str:
     conditional_starts: list[int] = []
     for number, code in enumerate(code_lines):
         cursor.line = number + 1
-        directive = code.lstrip(" \t\f")
-        if not directive.startswith("#"):
+        original_name = _directive_name(code)
+        if original_name is None:
             continue
-        name_match = re.match(r"#\s*([A-Za-zА-Яа-яЁё]+)\b", directive)
-        if not name_match:
-            return source
-        name = name_match.group(1).casefold()
+        if not original_name:
+            raise FormatError("директива без имени")
+        name = original_name.casefold()
         region_kind = _REGION_DIRECTIVES.get(name)
         conditional_kind = _CONDITIONAL_DIRECTIVES.get(name)
         if region_kind:
@@ -446,8 +454,10 @@ def _format_lines(source: str, max_depth: int | None, cursor: _Position) -> str:
             else:
                 conditional_syntax.pop()
                 conditional_starts.pop()
+        elif name in _PATCH_OPEN or name in _PATCH_CLOSE:
+            raise FormatError(f"непарная директива расширения #{original_name}")
         else:
-            return source
+            raise FormatError(f"неизвестная директива #{original_name}")
     cursor.line = None
     if region_stack:
         raise FormatError("незакрытая область", region_stack[-1] + 1)
