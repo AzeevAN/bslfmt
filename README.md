@@ -43,6 +43,36 @@ Python-библиотека и CLI; интеграция с MCP 1C будет о
   `#Вставка`/`#Удаление`, регистр букв, порядок и перенос кода (длинные
   строки не переносятся).
 
+## Установка
+
+Нужен Python 3.10+ или [uv](https://docs.astral.sh/uv/) — он сам скачает
+Python. Пакет без зависимостей, одинаков для Windows, macOS и Linux.
+
+```sh
+uv tool install bslfmt        # команда bslfmt в терминале (рекомендуется)
+pipx install bslfmt           # то же через pipx
+uvx bslfmt Модуль.bsl         # разовый запуск без установки
+```
+
+Установить `uv`: Windows — `winget install astral-sh.uv` (или
+`powershell -c "irm https://astral.sh/uv/install.ps1 | iex"`); macOS —
+`brew install uv`; macOS и Linux — `curl -LsSf https://astral.sh/uv/install.sh | sh`.
+Обновление: `uv tool upgrade bslfmt` (или `pipx upgrade bslfmt`).
+
+### Для агентов и хуков
+
+Форматировать файл на месте — одна команда, модуль через контекст агента не
+передаётся:
+
+```sh
+uvx bslfmt -i Модуль.bsl            # отформатировать файл (uv сам поставит пакет)
+uvx bslfmt --check Модуль.bsl       # код выхода 1 — файл нужно отформатировать
+uvx bslfmt -i -sbc Модуль.bsl       # и удалить комментарии внутри методов
+```
+
+Если пакет установлен (`uv tool install bslfmt`), то же без `uvx`. Вывод —
+UTF-8; сводка на файл: `ФАЙЛ: изменён (строк: N)` или `ФАЙЛ: без изменений`.
+
 ## Установка для разработки
 
 ```sh
@@ -52,8 +82,7 @@ python -m pip install -e .
 python -m unittest discover -s tests -v
 ```
 
-Команда `bslfmt` появляется в активном окружении. До публикации установку
-выполняют из клона проекта.
+Команда `bslfmt` появляется в активном окружении.
 
 CI (GitHub Actions) прогоняет тесты на Windows, macOS и Linux и проверяет
 установленную команду: `python tests/cli_smoke.py` после `pip install .`.

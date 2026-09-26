@@ -4,21 +4,34 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bslfmt"
-version = "0.20.0"
-description = "Детерминированный форматтер структурных отступов BSL"
+version = "0.20.1"
+description = "Детерминированный форматтер кода 1С (BSL): отступы и пробелы по стандартам 1С"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.10"
+authors = [{ name = "AzeevAN" }]
+keywords = ["1c", "1c-enterprise", "bsl", "formatter", "1с", "форматтер"]
 dependencies = []
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
   "Operating System :: OS Independent",
   "Programming Language :: Python :: 3",
+  "Natural Language :: Russian",
   "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Topic :: Software Development :: Code Generators",
 ]
+
+[project.urls]
+Homepage = "https://github.com/AzeevAN/bslfmt"
+Repository = "https://github.com/AzeevAN/bslfmt"
+Changelog = "https://github.com/AzeevAN/bslfmt/blob/main/CHANGELOG.md"
+Issues = "https://github.com/AzeevAN/bslfmt/issues"
 
 [project.scripts]
 bslfmt = "bslfmt.__main__:main"
