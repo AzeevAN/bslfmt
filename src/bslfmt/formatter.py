@@ -282,7 +282,7 @@ def _is_binary_operator(tokens, index: int) -> bool:
     )
 
 
-def _normalize_spacing(source: str) -> str:
+def _normalize_spacing(source: str, collapse_blank_lines: bool = False) -> str:
     """Нормализовать пробелы в коде вне строк, комментариев и директив.
 
     Бинарный оператор получает по пробелу с каждой стороны, лишние пробелы
@@ -290,15 +290,34 @@ def _normalize_spacing(source: str) -> str:
     запятой — пробел (кроме конца строки и перед «)»), перед «,» «;» «)» и
     после «(» пробелов нет (кроме «( // комментарий»). Всё — за один разбор:
     вставленные пробелы не соседствуют с другими пробелами и не бывают
-    отступом.
+    отступом. collapse_blank_lines — заодно оставить не больше одной пустой
+    строки подряд (см. _collapse_blank_lines): литералы и области правки —
+    цельные токены, пустые строки внутри них не задеваются.
     """
     tokens = _token_rows(source)
     directive_lines = _directive_line_starts(source)
     line_starts, indented = _line_context(tokens)
     last = len(tokens) - 1
     output: list[str] = []
+    line_output_start = 0
+    line_blank = True
+    blank_run = 0
     for index, token in enumerate(tokens):
         kind = token[_KIND]
+        if kind == "newline":
+            if line_blank:
+                blank_run += 1
+                if collapse_blank_lines and blank_run > 1:
+                    del output[line_output_start:]
+                    continue
+            else:
+                blank_run = 0
+            output.append(token[_TEXT])
+            line_output_start = len(output)
+            line_blank = True
+            continue
+        if kind != "whitespace":
+            line_blank = False
         on_directive = line_starts[index] in directive_lines
         if kind == "whitespace":
             if on_directive or indented[index]:
@@ -331,6 +350,9 @@ def _normalize_spacing(source: str) -> str:
                 output.append(" ")
             continue
         output.append(token[_TEXT])
+    if collapse_blank_lines and line_blank and blank_run >= 1:
+        # Последняя строка без перевода строки — из пробелов после пустой.
+        del output[line_output_start:]
     return "".join(output)
 
 
@@ -386,11 +408,13 @@ class _Position:
     line: int | None = None
 
 
-def _format_active_code(source: str, max_depth: int | None, tokens=None) -> str:
+def _format_active_code(
+    source: str, max_depth: int | None, tokens=None, collapse_blank_lines: bool = False,
+) -> str:
     """Выравнять только отступы распознанных блоков; при сомнении отказать."""
     cursor = _Position()
     try:
-        return _LineFormatter(source, max_depth, cursor, tokens).run()
+        return _LineFormatter(source, max_depth, cursor, tokens).run(collapse_blank_lines)
     except FormatError as error:
         if error.line is None and cursor.line is not None:
             raise FormatError(error.message, cursor.line) from None
@@ -508,7 +532,7 @@ class _LineFormatter:
         self.offset = 0
         self.string_index = 0
 
-    def run(self) -> str:
+    def run(self, collapse_blank_lines: bool = False) -> str:
         region_lines, conditional_lines = _scan_directives(self.code_lines, self.cursor)
         for number, (line, code) in enumerate(zip(self.lines, self.code_lines)):
             self.cursor.line = number + 1
@@ -546,7 +570,7 @@ class _LineFormatter:
             if not inside_string:
                 self.literal_delta = _lead_width(self.result[-1]) - _lead_width(line)
         self._finish()
-        return _normalize_spacing("".join(self.result))
+        return _normalize_spacing("".join(self.result), collapse_blank_lines)
 
     def _place_comments(self, code_line: str) -> None:
         """Поставить ждущие комментарии на отступ строки кода после них.
@@ -1024,7 +1048,10 @@ def format_code(
     # Без областей расширения токены исходника нужны дважды — в форматировании
     # и в итоговой проверке; разбираем один раз.
     tokens = None if _patch_regions(body) else _token_rows(body)
-    result = _collapse_blank_lines(_format_with_patches(body, max_depth, tokens))
+    result = _format_with_patches(body, max_depth, tokens)
+    if tokens is None:
+        # Режим областей правки: число строк меняется только после сборки.
+        result = _collapse_blank_lines(result)
     _check_significant_tokens(body, result, tokens)
     return bom + result
 
@@ -1032,7 +1059,7 @@ def format_code(
 def _format_with_patches(source: str, max_depth: int | None, tokens=None) -> str:
     regions = _patch_regions(source)
     if not regions:
-        return _format_active_code(source, max_depth, tokens)
+        return _format_active_code(source, max_depth, tokens, collapse_blank_lines=True)
     for region in regions:
         if not region.closed:
             # Лексер отдаёт незакрытой области остаток файла, чтобы её текст не
