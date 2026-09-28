@@ -627,6 +627,15 @@ class _LineFormatter:
             elif inside_string:
                 self.return_pending = False
                 self.pending_comments.clear()
+                if (self.stripped is not None and self._inside_method()
+                        and line.lstrip(" \t\f").startswith("//")):
+                    # Строка-комментарий BSL между строками литерала (лексер
+                    # не считает её текстом строки): в значение не входит.
+                    # Литерал на ней не кончается, состояние учтёт следующая.
+                    self.stripped.add(number + 1)
+                    if self.keep_line_count:
+                        self.result.append(line)
+                    continue
                 self._string_tail_line(line, code)
             elif not line.strip(" \t\f\r\n"):
                 self.result.append(line)
@@ -1080,6 +1089,25 @@ def _literal_text(row) -> str:
     return _PIPE_LEAD.sub(r"\1", text) if row[_KIND] == "string" else text
 
 
+def _without_stripped_lines(row, stripped: set[int]):
+    """Литерал без строк-комментариев, удалённых strip_body_comments.
+
+    Удаляются только строки после первой, начинающиеся с «//» (лексер не
+    относит их к тексту строки); вместе с ними — их перевод строки. Прочие
+    строки литерала сравниваются дословно.
+    """
+    first = row[_LINE]
+    pieces = _split_lines(row[_TEXT])
+    kept = [
+        piece for offset, piece in enumerate(pieces)
+        if not (offset and first + offset in stripped
+                and piece.lstrip(" \t\f").startswith("//"))
+    ]
+    if len(kept) == len(pieces):
+        return row
+    return (row[_KIND], "".join(kept)) + tuple(row[2:])
+
+
 def _is_word_char(char: str) -> bool:
     return char.isalnum() or char == "_"
 
@@ -1157,7 +1185,8 @@ def _check_significant_tokens(
         if stripped:
             # Удалённые по strip_body_comments строки-комментарии не ждём.
             before_rows = [
-                row for row in before_rows
+                _without_stripped_lines(row, stripped) if row[_KIND] == "string" else row
+                for row in before_rows
                 if not (row[_KIND] == "comment" and row[_LINE] in stripped)
             ]
         after_rows = _token_rows(after_view)
@@ -1218,8 +1247,9 @@ def format_code(
     max_chars ограничивает длину исходника, max_depth — вложенность блоков;
     при превышении — FormatError. None отключает соответствующий лимит.
     strip_body_comments — удалить строки-комментарии внутри тел процедур и
-    функций (комментарии в конце строки кода, снаружи методов, внутри строк и
-    областей #Вставка/#Удаление остаются).
+    функций, в том числе между строками многострочного литерала (в значение
+    строки они не входят); комментарии в конце строки кода, снаружи методов,
+    внутри текста строки («|// …») и областей #Вставка/#Удаление остаются.
     """
     if max_chars is not None and len(source) > max_chars:
         raise FormatError(f"размер исходника больше {max_chars} символов")

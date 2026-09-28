@@ -1174,6 +1174,54 @@ class FormatterTests(unittest.TestCase):
         self.assertEqual(format_code(source, strip_body_comments=True), expected)
         self.assertEqual(format_code(expected, strip_body_comments=True), expected)
 
+    def test_strip_body_comments_removes_comment_lines_between_literal_lines(self):
+        # Строка-комментарий BSL между строками литерала в значение строки не
+        # входит и удаляется; «|// …» — часть текста запроса и остаётся.
+        source = (
+            "Процедура П()\n"
+            "Запрос.Текст = \"ВЫБРАТЬ\n"
+            "|\tТ.Код,\n"
+            "//|\tТ.Наименование,\n"
+            "\t\t// пояснение с \"кавычкой\"\n"
+            "|\tТ.Ссылка\n"
+            "|//КодГСВС И Т.Код = &Код\n"
+            "|ИЗ\n"
+            "|\tСправочник.Т КАК Т\";\n"
+            "КонецПроцедуры\n"
+        )
+        expected = (
+            "Процедура П()\n"
+            "\tЗапрос.Текст = \"ВЫБРАТЬ\n"
+            "\t|\tТ.Код,\n"
+            "\t|\tТ.Ссылка\n"
+            "\t|//КодГСВС И Т.Код = &Код\n"
+            "\t|ИЗ\n"
+            "\t|\tСправочник.Т КАК Т\";\n"
+            "КонецПроцедуры\n"
+        )
+        self.assertEqual(format_code(source, strip_body_comments=True), expected)
+        self.assertEqual(format_code(expected, strip_body_comments=True), expected)
+        crlf = format_code(source.replace("\n", "\r\n"), strip_body_comments=True)
+        self.assertEqual(crlf, expected.replace("\n", "\r\n"))
+        # без флага строка-комментарий остаётся
+        self.assertIn("//|\tТ.Наименование,", format_code(source))
+
+    def test_strip_body_comments_keeps_literal_comment_lines_outside_methods(self):
+        source = "Т = \"ВЫБРАТЬ\n//|\tТ.Код,\n|\t1\";\n"
+        self.assertEqual(format_code(source, strip_body_comments=True), source)
+
+    def test_strip_body_comments_keeps_literal_comment_lines_in_patch_regions(self):
+        source = (
+            "Процедура П()\n"
+            "#Вставка\n"
+            "Т = \"ВЫБРАТЬ\n"
+            "//|\tТ.Код,\n"
+            "|\t1\";\n"
+            "#КонецВставки\n"
+            "КонецПроцедуры\n"
+        )
+        self.assertEqual(format_code(source, strip_body_comments=True), source)
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(
