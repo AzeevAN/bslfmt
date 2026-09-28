@@ -177,7 +177,10 @@ def _source_version(root: Path | None = None) -> str | None:
     с name = "bslfmt".
     """
     if root is None:
-        root = Path(__file__).resolve().parents[2]
+        parents = Path(__file__).resolve().parents
+        if len(parents) < 3:
+            return None
+        root = parents[2]
     try:
         text = (root / "pyproject.toml").read_text(encoding="utf-8")
     except (OSError, UnicodeError):
@@ -281,8 +284,13 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
     if "--" in arguments:
         split = arguments.index("--")
         arguments, files_after_dash = arguments[:split], arguments[split + 1:]
-    # Справка — при любых других аргументах, как у обычного argparse.
-    if "-h" in arguments or "--help" in arguments:
+    # Справка — при любых других аргументах, как у обычного argparse; значение
+    # --output («--output -h») — не флаг справки.
+    flags = [
+        argument for position, argument in enumerate(arguments)
+        if position == 0 or arguments[position - 1] != "--output"
+    ]
+    if "-h" in flags or "--help" in flags:
         return argparse.Namespace(help=True, version=False)
     # Файлы и флаги в любом порядке: «bslfmt а.bsl -i б.bsl».
     args = parser.parse_intermixed_args(arguments)
@@ -314,8 +322,12 @@ def _summary(text: str) -> None:
         _write(sys.stdout, text)
     except OSError:
         with contextlib.suppress(OSError, ValueError, AttributeError):
+            target = sys.stdout.fileno()
             devnull = os.open(os.devnull, os.O_WRONLY)
-            os.dup2(devnull, sys.stdout.fileno())
+            try:
+                os.dup2(devnull, target)
+            finally:
+                os.close(devnull)
 
 
 def _process(name: str, args: argparse.Namespace) -> int:

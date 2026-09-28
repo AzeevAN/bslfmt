@@ -122,6 +122,7 @@ class _FormatState:
     # Восстанавливается в каждой ветви #Если, но в сверку ветвей не входит:
     # это подсказка отступа, а не структура.
     value_expected: bool = field(default=False, compare=False)
+    return_pending: bool = field(default=False, compare=False)
 
 
 @dataclass
@@ -647,7 +648,7 @@ class _LineFormatter:
                 self.pending_comments.clear()
                 self._region_line(line)
             elif number in conditional_lines:
-                self.return_pending = False
+                # Признак Возврат переходит через #Если/#Иначе, как «=».
                 self.pending_comments.clear()
                 self._conditional_line(line, conditional_lines[number])
             else:
@@ -696,6 +697,7 @@ class _LineFormatter:
             continuation_depth=self.continuation_depth,
             pending_header=self.pending_header,
             value_expected=self.value_expected,
+            return_pending=self.return_pending,
         )
 
     def _restore(self, state: _FormatState) -> None:
@@ -705,6 +707,7 @@ class _LineFormatter:
         self.continuation_depth = state.continuation_depth
         self.pending_header = state.pending_header
         self.value_expected = state.value_expected
+        self.return_pending = state.return_pending
 
     def _push(self, block: _Block) -> None:
         if self.max_depth is not None and len(self.stack) >= self.max_depth:
@@ -841,6 +844,8 @@ class _LineFormatter:
                     "ветви #Если завершаются разным структурным состоянием"
                 )
             self._restore(branch_ends[0])
+            # Значение Возврат ждём, только если его ждут все ветви.
+            self.return_pending = all(branch.return_pending for branch in branch_ends)
         self.result.append(_reindent(line, 0))
 
     def _pending_header_line(self, line: str, code: str) -> None:

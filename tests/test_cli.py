@@ -64,6 +64,12 @@ class CliTests(unittest.TestCase):
             '[project]\nname = "bslfmt"\nversion = "1.2.3"\n', encoding="utf-8")
         self.assertEqual(_source_version(self.dir), "1.2.3")
 
+    def test_source_version_in_shallow_directory(self):
+        # пакет у корня файловой системы: выше него нет двух каталогов
+        import bslfmt.__main__ as cli
+        with mock.patch.object(cli, "__file__", str(Path(self.dir.anchor) / "__main__.py")):
+            self.assertIsNone(cli._source_version())
+
     def test_usage_errors_are_russian_with_code_2(self):
         a = str(self.write("а.bsl", UNFORMATTED))
         b = str(self.write("б.bsl", UNFORMATTED))
@@ -89,6 +95,11 @@ class CliTests(unittest.TestCase):
                 self.assertIn("Использование: bslfmt", out)
         # после «--» это имя файла, а не флаг
         self.assertEqual(run(["--check", "--", "-h"])[0], 2)
+        # значение --output — не флаг справки
+        path = str(self.write("а.bsl", UNFORMATTED))
+        code, out, err = run([path, "--output", "-h"])
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("--output", err)
 
     def test_long_flags_are_not_abbreviated(self):
         path = str(self.write("а.bsl", UNFORMATTED))
@@ -263,6 +274,52 @@ class CliTests(unittest.TestCase):
         path = self.write("м.bsl", UNFORMATTED)
         stderr = StringIO()
         with mock.patch("sys.stdout", ClosedStdout()), redirect_stderr(stderr):
+            code = main(["-i", str(path)])
+        self.assertEqual((code, stderr.getvalue()), (0, ""))
+        self.assertEqual(path.read_text(encoding="utf-8"), FORMATTED)
+
+    def test_in_place_summary_failure_redirects_stdout_to_devnull(self):
+        # Сбой сводки: дескриптор stdout перенаправляется в devnull, свой
+        # дескриптор devnull закрывается.
+        out_path = self.dir / "вывод.txt"
+        out_fd = os.open(out_path, os.O_WRONLY | os.O_CREAT)
+        self.addCleanup(os.close, out_fd)
+
+        class BrokenStdout:
+            def write(self, text):
+                raise BrokenPipeError(32, "Broken pipe")
+
+            def flush(self):
+                pass
+
+            def fileno(self):
+                return out_fd
+
+        opened = []
+        real_open = os.open
+
+        def tracking_open(name, *args, **kwargs):
+            descriptor = real_open(name, *args, **kwargs)
+            if name == os.devnull:
+                opened.append(descriptor)
+            return descriptor
+
+        path = self.write("м.bsl", UNFORMATTED)
+        with mock.patch("sys.stdout", BrokenStdout()), \
+                mock.patch("bslfmt.__main__.os.open", tracking_open):
+            code = main(["-i", str(path)])
+        self.assertEqual(code, 0)
+        self.assertEqual(path.read_text(encoding="utf-8"), FORMATTED)
+        os.write(out_fd, b"x")
+        self.assertEqual(out_path.read_bytes(), b"")
+        self.assertEqual(len(opened), 1)
+        with self.assertRaises(OSError):
+            os.fstat(opened[0])
+
+    def test_in_place_without_stdout(self):
+        path = self.write("м.bsl", UNFORMATTED)
+        stderr = StringIO()
+        with mock.patch("sys.stdout", None), redirect_stderr(stderr):
             code = main(["-i", str(path)])
         self.assertEqual((code, stderr.getvalue()), (0, ""))
         self.assertEqual(path.read_text(encoding="utf-8"), FORMATTED)
