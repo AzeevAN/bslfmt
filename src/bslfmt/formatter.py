@@ -421,13 +421,16 @@ class _Position:
 
 def _format_active_code(
     source: str, max_depth: int | None, tokens=None, collapse_blank_lines: bool = False,
-    stripped: set[int] | None = None, keep_line_count: bool = False,
+    stripped: set[int] | None = None, keep_line_count: bool = False, masked=None,
 ) -> str:
-    """Выравнять только отступы распознанных блоков; при сомнении отказать."""
+    """Выравнять только отступы распознанных блоков; при сомнении отказать.
+
+    masked — готовый результат _masked_code(source, tokens), если он есть.
+    """
     cursor = _Position()
     try:
         return _LineFormatter(
-            source, max_depth, cursor, tokens, stripped, keep_line_count
+            source, max_depth, cursor, tokens, stripped, keep_line_count, masked
         ).run(collapse_blank_lines)
     except FormatError as error:
         if error.line is None and cursor.line is not None:
@@ -576,14 +579,16 @@ class _LineFormatter:
 
     def __init__(
         self, source: str, max_depth: int | None, cursor: _Position, tokens=None,
-        stripped: set[int] | None = None, keep_line_count: bool = False,
+        stripped: set[int] | None = None, keep_line_count: bool = False, masked=None,
     ) -> None:
         # stripped — куда записать номера удалённых строк-комментариев (None —
         # не удалять); keep_line_count — режим областей правки: строка остаётся
         # до сборки, удаляется потом.
         self.stripped = stripped
         self.keep_line_count = keep_line_count
-        masked, self.strings, self.literal_starts, self.opaque_lines = _masked_code(source, tokens)
+        masked, self.strings, self.literal_starts, self.opaque_lines = (
+            _masked_code(source, tokens) if masked is None else masked
+        )
         self.lines = _split_lines(source)
         self.code_lines = _split_lines(masked)
         if len(self.lines) != len(self.code_lines):
@@ -1235,6 +1240,168 @@ def _collapse_blank_lines(text: str) -> str:
     return "".join(kept)
 
 
+# Перенос строк (решение владельца 2026-09-28): каждая инструкция — на своей
+# строке, тело блока — со следующей строки, концы блоков и ветви — отдельно.
+_BREAK_AFTER = frozenset({
+    "тогда", "then", "цикл", "do", "попытка", "try", "иначе", "else",
+    "исключение", "except",
+})
+_BREAK_BEFORE = frozenset({
+    "конецесли", "endif", "конеццикла", "enddo", "конецпопытки", "endtry",
+    "иначе", "else", "иначеесли", "elsif", "elseif", "исключение", "except",
+})
+# Строки маски, где может понадобиться перенос: код после «;» или после
+# слова-начала тела, код перед концом блока или ветвью. Точные места
+# выбирает _break_points; здесь нужен быстрый поиск кандидатов по всему
+# модулю: слова ищутся как подстроки в тексте нижнего регистра (поиск без
+# учёта регистра по кириллице перебирает каждую позицию и втрое медленнее).
+_CODE_AFTER_SEMICOLON = re.compile(r";[ \t\f]*[^\s;]")
+_BREAK_WORD_SEARCH = tuple(
+    (word, re.compile(word)) for word in sorted(_BREAK_AFTER | _BREAK_BEFORE)
+)
+# Запасной путь, если нижний регистр меняет длину текста (редкие символы).
+_BREAK_CANDIDATE = re.compile(
+    r";[ \t\f]*[^\s;]"
+    r"|(?<![\w.])(?:тогда|then|цикл|do|попытка|try|иначе|else|исключение|except)"
+    r"[ \t\f]+[^\s;]"
+    r"|[^\s][ \t\f]+(?:конецесли|endif|конеццикла|enddo|конецпопытки|endtry"
+    r"|иначе|else|иначеесли|elsif|elseif|исключение|except)(?!\w)",
+    re.IGNORECASE,
+)
+_NEWLINE = re.compile(r"\r\n|\r|\n")
+
+
+_NEXT_CHAR = re.compile(r"[ \t\f]*([^ \t\f])")
+
+
+def _break_points(masked_line: str) -> list[int]:
+    """Позиции в строке маски, где вставить перевод строки."""
+    body = masked_line.rstrip("\r\n")
+    lead = _NEXT_CHAR.match(body)
+    if lead is None or lead.group(1) in "#&":
+        return []
+    first_code = lead.start(1)
+
+    def code_follows(position: int) -> bool:
+        # Дальше в строке есть код, и это не пустая инструкция «;».
+        following = _NEXT_CHAR.match(body, position)
+        return following is not None and following.group(1) != ";"
+
+    points = set()
+    for match in _IDENTIFIER.finditer(body):
+        if match.start() and body[match.start() - 1] == ".":
+            continue
+        word = match.group().casefold()
+        if word in _BREAK_BEFORE and match.start() > first_code:
+            points.add(match.start())
+        # «Цикл;», «Иначе;» — пустая инструкция: остаётся при слове.
+        if word in _BREAK_AFTER and code_follows(match.end()):
+            points.add(match.end())
+    for match in re.finditer(";", body):
+        if code_follows(match.end()):
+            points.add(match.end())
+    return sorted(points)
+
+
+def _break_candidates(masked: str) -> list[int]:
+    """Позиции в маске, строки которых стоит проверить _break_points."""
+    positions = [match.start() for match in _CODE_AFTER_SEMICOLON.finditer(masked)]
+    lower = masked.lower()
+    if len(lower) != len(masked):
+        return [match.start() for match in _BREAK_CANDIDATE.finditer(masked)]
+    for word, search in _BREAK_WORD_SEARCH:
+        for match in search.finditer(lower):
+            start, end = match.span()
+            if start and (lower[start - 1].isalnum() or lower[start - 1] in "_."):
+                continue
+            if end < len(lower) and (lower[end].isalnum() or lower[end] == "_"):
+                continue
+            if word in _BREAK_AFTER:
+                following = _NEXT_CHAR.match(lower, end)
+                if following is not None and following.group(1) not in ";\r\n":
+                    positions.append(start)
+                    continue
+            if word in _BREAK_BEFORE:
+                if lower[_line_start(lower, start):start].strip(" \t\f"):
+                    positions.append(start)
+    positions.sort()
+    return positions
+
+
+def _line_start(text: str, position: int) -> int:
+    newline = text.rfind("\n", 0, position)
+    return max(newline, text.rfind("\r", newline + 1, position)) + 1
+
+
+def _break_lines(source: str, tokens=None):
+    """Разнести инструкции и тела однострочных блоков по строкам.
+
+    Меняются только пробелы и переводы строк: в точке переноса пробелы
+    убираются, новая строка получает отступ исходной (от него форматтер
+    считает сдвиг строк «|» литерала). Литералы, комментарии, директивы и
+    области правки не трогаются; комментарий в конце строки остаётся у
+    последней части.
+
+    Возвращает (текст, маска, первые_строки): если переносить нечего — сам
+    source и готовую маску _masked_code (её не нужно считать повторно), иначе
+    новый текст, None и номер (с 0) первой новой строки для каждой исходной.
+    """
+    masked_info = _masked_code(source, tokens)
+    masked, _, _, opaque_lines = masked_info
+    # Кандидатов обычно единицы: номер строки и её маску находим по месту,
+    # не разбивая весь модуль на строки.
+    breaks = {}
+    line = 0
+    counted_to = 0
+    for position in _break_candidates(masked):
+        if position < counted_to:
+            continue
+        line += len(_NEWLINE.findall(masked, counted_to, position))
+        line_start = _line_start(masked, position)
+        line_end = _NEWLINE.search(masked, position)
+        counted_to = line_end.start() if line_end else len(masked)
+        if line in opaque_lines:
+            continue
+        points = _break_points(masked[line_start:counted_to])
+        if points:
+            breaks[line] = points
+    if not breaks:
+        return source, masked_info, None
+    lines = _split_lines(source)
+    first_newline = _NEWLINE.search(source)
+    default_newline = first_newline.group() if first_newline else "\n"
+    output = []
+    first_lines = []
+    count = 0
+    for number, line in enumerate(lines):
+        first_lines.append(count)
+        points = breaks.get(number)
+        if points is None:
+            output.append(line)
+            count += 1
+            continue
+        newline_match = _NEWLINE.search(line)
+        newline = newline_match.group() if newline_match else default_newline
+        indent = line[:len(line) - len(line.lstrip(" \t\f"))]
+        pieces = []
+        start = 0
+        for point in points:
+            pieces.append(line[start:point].rstrip(" \t\f"))
+            start = point
+            while start < len(line) and line[start] in " \t\f":
+                start += 1
+        pieces.append(line[start:])
+        # Соседние точки («;» и КонецЕсли за ней) дают пустой кусок.
+        kept = [
+            piece if index == 0 else indent + piece
+            for index, piece in enumerate(pieces)
+            if piece or index == len(pieces) - 1
+        ]
+        output.append(newline.join(kept))
+        count += len(kept)
+    return "".join(output), None, first_lines
+
+
 def format_code(
     source: str,
     *,
@@ -1261,23 +1428,37 @@ def format_code(
     # Без областей расширения токены исходника нужны дважды — в форматировании
     # и в итоговой проверке; разбираем один раз.
     tokens = None if _patch_regions(body) else _token_rows(body)
+    # Перенос инструкций и тел блоков по строкам — до форматирования.
+    broken, masked, first_lines = _break_lines(body, tokens)
+    broken_tokens = tokens if first_lines is None or tokens is None else _token_rows(broken)
     # Номера (с 1) удалённых строк-комментариев — их не ждёт итоговая проверка.
     stripped: set[int] | None = set() if strip_body_comments else None
-    result = _format_with_patches(body, max_depth, tokens, stripped)
+    result = _format_with_patches(broken, max_depth, broken_tokens, stripped, masked)
     if tokens is None:
         # Режим областей правки: число строк меняется только после сборки.
         result = _collapse_blank_lines(result)
+    if stripped and first_lines is not None:
+        # Удалённые строки — целые строки исходника: переносом они не
+        # делятся, их номера пересчитываются в номера исходника.
+        stripped = {
+            number + 1 for number, first in enumerate(first_lines)
+            if first + 1 in stripped
+        }
+    # Сверка с исходником: и перенос, и форматирование меняют только пробелы
+    # и переводы строк.
     _check_significant_tokens(body, result, tokens, stripped)
     return bom + result
 
 
 def _format_with_patches(
     source: str, max_depth: int | None, tokens=None, stripped: set[int] | None = None,
+    masked=None,
 ) -> str:
     regions = _patch_regions(source)
     if not regions:
         return _format_active_code(
-            source, max_depth, tokens, collapse_blank_lines=True, stripped=stripped
+            source, max_depth, tokens, collapse_blank_lines=True, stripped=stripped,
+            masked=masked,
         )
     for region in regions:
         if not region.closed:

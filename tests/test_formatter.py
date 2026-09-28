@@ -54,7 +54,8 @@ class FormatterTests(unittest.TestCase):
         expected = (
             "Процедура Пример()\n"
             "\tЕсли Истина Тогда\n"
-            '\tИначе Сообщить("Тогда"); // Тогда в комментарии тоже обычный текст\n'
+            "\tИначе\n"
+            '\t\tСообщить("Тогда"); // Тогда в комментарии тоже обычный текст\n'
             "\tКонецЕсли;\n"
             "КонецПроцедуры\n"
         )
@@ -112,7 +113,8 @@ class FormatterTests(unittest.TestCase):
         expected = (
             "Procedure Example()\n"
             "\tIf Condition Then\n"
-            "\tElse Then\n"
+            "\tElse\n"
+            "\t\tThen\n"
             "\tEndIf;\n"
             "EndProcedure\n"
         )
@@ -128,7 +130,9 @@ class FormatterTests(unittest.TestCase):
         expected = (
             "Procedure Example()\n"
             "\tIf FirstCondition\n"
-            "\t\tOr SecondCondition Then Continue; EndIf;\n"
+            "\t\tOr SecondCondition Then\n"
+            "\t\tContinue;\n"
+            "\tEndIf;\n"
             "EndProcedure\n"
         )
         actual = format_code(source)
@@ -243,7 +247,8 @@ class FormatterTests(unittest.TestCase):
         with self.assertRaises(LexerError):
             format_code('Сообщить("незакрыто);\n')
 
-    def test_code_after_multiline_string_fails_closed(self):
+    def test_code_after_multiline_string(self):
+        # Инструкция после «;» в строке конца литерала переносится.
         source = (
             "Процедура Пример()\n"
             'Текст = "строка\n'
@@ -252,8 +257,20 @@ class FormatterTests(unittest.TestCase):
             "КонецЕсли;\n"
             "КонецПроцедуры\n"
         )
+        expected = (
+            "Процедура Пример()\n"
+            '\tТекст = "строка\n'
+            '";\n'
+            "\tЕсли Истина Тогда\n"
+            "\t\tСообщить(1);\n"
+            "\tКонецЕсли;\n"
+            "КонецПроцедуры\n"
+        )
+        self.assertEqual(format_code(source), expected)
+        self.assertEqual(format_code(expected), expected)
+        # Перенести некуда (нет «;») — отказ, а не догадка.
         with self.assertRaisesRegex(FormatError, "структурный код после многострочной строки"):
-            format_code(source)
+            format_code('Процедура П()\nЕсли А Тогда\nТ = "а\n|б" КонецЕсли;\nКонецПроцедуры\n')
 
     def test_multiline_string_can_close_an_enclosing_call(self):
         source = (
@@ -1065,7 +1082,7 @@ class FormatterTests(unittest.TestCase):
              "Функция Ф()\n#Если Клиент Тогда\n\tВозврат\n#КонецЕсли\n\tА = 1;\nКонецФункции\n"),
             # в одной строке с Тогда / Иначе
             ("Процедура П()\nЕсли А Тогда Возврат\nИначе Возврат\nКонецЕсли;\nКонецПроцедуры\n",
-             "Процедура П()\n\tЕсли А Тогда Возврат\n\tИначе Возврат\n\tКонецЕсли;\nКонецПроцедуры\n"),
+             "Процедура П()\n\tЕсли А Тогда\n\t\tВозврат\n\tИначе\n\t\tВозврат\n\tКонецЕсли;\nКонецПроцедуры\n"),
             # свойство .Возврат — не оператор
             ("Процедура П()\nСтруктура.Возврат\n= 1;\nКонецПроцедуры\n",
              "Процедура П()\n\tСтруктура.Возврат\n\t= 1;\nКонецПроцедуры\n"),
@@ -1222,6 +1239,69 @@ class FormatterTests(unittest.TestCase):
         )
         self.assertEqual(format_code(source, strip_body_comments=True), source)
 
+    def test_one_line_blocks_are_split(self):
+        # После Тогда/Цикл/Попытка/Иначе/Исключение — тело на следующей
+        # строке, концы блоков и ветви — отдельной строкой (решение владельца).
+        cases = (
+            ("Процедура П()\nif Истина Тогда Сообщить(\"А\"); КонецЕсли;\nКонецПроцедуры\n",
+             "Процедура П()\n\tif Истина Тогда\n\t\tСообщить(\"А\");\n\tКонецЕсли;\nКонецПроцедуры\n"),
+            # Иначе, несколько инструкций, комментарий в конце — у последней части
+            ("Процедура П()\nЕсли А Тогда Б = 1; В = 2; Иначе Г(); КонецЕсли; // к\nКонецПроцедуры\n",
+             "Процедура П()\n\tЕсли А Тогда\n\t\tБ = 1;\n\t\tВ = 2;\n\tИначе\n\t\tГ();\n"
+             "\tКонецЕсли; // к\nКонецПроцедуры\n"),
+            # цепочка ИначеЕсли
+            ("Процедура П()\nЕсли А = 1 Тогда Б = 1;\nИначеЕсли А = 2 Тогда Б = 2;\nИначе Б = 3;\nКонецЕсли;\nКонецПроцедуры\n",
+             "Процедура П()\n\tЕсли А = 1 Тогда\n\t\tБ = 1;\n\tИначеЕсли А = 2 Тогда\n\t\tБ = 2;\n"
+             "\tИначе\n\t\tБ = 3;\n\tКонецЕсли;\nКонецПроцедуры\n"),
+            # циклы, Попытка, английские слова, вложенные блоки
+            ("Процедура П()\nДля Каждого Х Из Т Цикл С = С + Х; КонецЦикла;\n"
+             "Попытка Ф(); Исключение Г(); КонецПопытки;\nIf A Then B(); EndIf;\n"
+             "Если А Тогда Если Б Тогда В(); КонецЕсли; КонецЕсли;\nКонецПроцедуры\n",
+             "Процедура П()\n\tДля Каждого Х Из Т Цикл\n\t\tС = С + Х;\n\tКонецЦикла;\n"
+             "\tПопытка\n\t\tФ();\n\tИсключение\n\t\tГ();\n\tКонецПопытки;\n"
+             "\tIf A Then\n\t\tB();\n\tEndIf;\n"
+             "\tЕсли А Тогда\n\t\tЕсли Б Тогда\n\t\t\tВ();\n\t\tКонецЕсли;\n\tКонецЕсли;\nКонецПроцедуры\n"),
+            # каждая инструкция — на своей строке, и вне методов
+            ("Перем А; Перем Б;\nПроцедура П()\nА = 1; Б = 2;\nКонецПроцедуры\n",
+             "Перем А;\nПерем Б;\nПроцедура П()\n\tА = 1;\n\tБ = 2;\nКонецПроцедуры\n"),
+            # пустая инструкция, «;;», слова в строках и свойства не режутся
+            ("Процедура П()\nДля Каждого Х Из Т Цикл;\nКонецЦикла;\nПопытка Ф(); Исключение; КонецПопытки;\n"
+             "А = 1;;\nС.Иначе = 1;\nТ = \"Если А Тогда Б; КонецЕсли\";\nКонецПроцедуры\n",
+             "Процедура П()\n\tДля Каждого Х Из Т Цикл;\n\tКонецЦикла;\n\tПопытка\n\t\tФ();\n"
+             "\tИсключение;\n\tКонецПопытки;\n\tА = 1;;\n\tС.Иначе = 1;\n"
+             "\tТ = \"Если А Тогда Б; КонецЕсли\";\nКонецПроцедуры\n"),
+            # многострочный литерал в теле: строки «|» — вместе с инструкцией
+            ("Процедура П()\n\tЕсли А Тогда Б = \"ВЫБРАТЬ\n\t|\t1\"; КонецЕсли;\nКонецПроцедуры\n",
+             "Процедура П()\n\tЕсли А Тогда\n\t\tБ = \"ВЫБРАТЬ\n\t\t|\t1\";\n\tКонецЕсли;\nКонецПроцедуры\n"),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(format_code(source), expected)
+                self.assertEqual(format_code(expected), expected)
+                crlf = format_code(source.replace("\n", "\r\n"))
+                self.assertEqual(crlf, expected.replace("\n", "\r\n"))
+
+    def test_split_keeps_patch_regions_verbatim(self):
+        source = (
+            "Процедура П()\n"
+            "А = 1; Б = 2;\n"
+            "#Вставка\n"
+            "В = 1; Г = 2;\n"
+            "#КонецВставки\n"
+            "КонецПроцедуры\n"
+        )
+        expected = (
+            "Процедура П()\n"
+            "\tА = 1;\n"
+            "\tБ = 2;\n"
+            "#Вставка\n"
+            "В = 1; Г = 2;\n"
+            "#КонецВставки\n"
+            "КонецПроцедуры\n"
+        )
+        self.assertEqual(format_code(source), expected)
+        self.assertEqual(format_code(expected), expected)
+
     def test_keywords_are_case_insensitive(self):
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(
@@ -1296,7 +1376,9 @@ class FormatterTests(unittest.TestCase):
             '\t\tОтвет = Вопрос("а" +\n'
             '\t\t\t"б", 1,\n'
             "\t\t\t2);\n"
-            "\tИначе Сообщить(1); КонецЕсли;\n"
+            "\tИначе\n"
+            "\t\tСообщить(1);\n"
+            "\tКонецЕсли;\n"
             "КонецПроцедуры\n"
         )
         self.assertEqual(format_code(source), expected)
@@ -1337,7 +1419,8 @@ class FormatterTests(unittest.TestCase):
             "Процедура Пример()\n"
             "\tЕсли Истина Тогда\n"
             "\t\tСообщить(1);\n"
-            "\tИначе Ответ = Форматировать(\n"
+            "\tИначе\n"
+            "\t\tОтвет = Форматировать(\n"
             '\t\t\t"значение",\n'
             "\t\t\t2);\n"
             "\t\tСообщить(Ответ);\n"
