@@ -1259,15 +1259,6 @@ _CODE_AFTER_SEMICOLON = re.compile(r";[ \t\f]*[^\s;]")
 _BREAK_WORD_SEARCH = tuple(
     (word, re.compile(word)) for word in sorted(_BREAK_AFTER | _BREAK_BEFORE)
 )
-# Запасной путь, если нижний регистр меняет длину текста (редкие символы).
-_BREAK_CANDIDATE = re.compile(
-    r";[ \t\f]*[^\s;]"
-    r"|(?<![\w.])(?:тогда|then|цикл|do|попытка|try|иначе|else|исключение|except)"
-    r"[ \t\f]+[^\s;]"
-    r"|[^\s][ \t\f]+(?:конецесли|endif|конеццикла|enddo|конецпопытки|endtry"
-    r"|иначе|else|иначеесли|elsif|elseif|исключение|except)(?!\w)",
-    re.IGNORECASE,
-)
 _NEWLINE = re.compile(r"\r\n|\r|\n")
 
 
@@ -1306,9 +1297,10 @@ def _break_points(masked_line: str) -> list[int]:
 def _break_candidates(masked: str) -> list[int]:
     """Позиции в маске, строки которых стоит проверить _break_points."""
     positions = [match.start() for match in _CODE_AFTER_SEMICOLON.finditer(masked)]
-    lower = masked.lower()
-    if len(lower) != len(masked):
-        return [match.start() for match in _BREAK_CANDIDATE.finditer(masked)]
+    # «İ» (U+0130) — единственный символ, у которого lower() длиннее одного
+    # знака: заменяем его буквой, чтобы позиции совпадали. Граница слова не
+    # меняется, а ключевым словом «İ» не считается нигде в форматтере.
+    lower = masked.replace("\u0130", "x").lower()
     for word, search in _BREAK_WORD_SEARCH:
         for match in search.finditer(lower):
             start, end = match.span()

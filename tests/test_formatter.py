@@ -1281,6 +1281,16 @@ class FormatterTests(unittest.TestCase):
                 crlf = format_code(source.replace("\n", "\r\n"))
                 self.assertEqual(crlf, expected.replace("\n", "\r\n"))
 
+    def test_split_does_not_depend_on_dotted_capital_i(self):
+        # «İ» (U+0130) — единственный символ, у которого lower() длиннее
+        # одного знака; перенос с ним и без него должен быть одинаковым,
+        # в том числе для конца блока вплотную к коду.
+        source = "Процедура П()\nЕсли А Тогда\nБ()КонецЕсли;\nКонецПроцедуры\n"
+        expected = "Процедура П()\n\tЕсли А Тогда\n\t\tБ()\n\tКонецЕсли;\nКонецПроцедуры\n"
+        self.assertEqual(format_code(source), expected)
+        with_i = "Перем İмя;\n" + source
+        self.assertEqual(format_code(with_i), "Перем İмя;\n" + expected)
+
     def test_split_keeps_patch_regions_verbatim(self):
         source = (
             "Процедура П()\n"
