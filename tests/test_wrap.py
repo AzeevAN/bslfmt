@@ -175,6 +175,16 @@ class WrapTests(unittest.TestCase):
         self.assertEqual(wrap_statement(code, 1, lambda text: _normalize_spacing(text).lower()),
                          expected)
 
+    def test_author_spaces_inside_line_are_kept(self):
+        # Внутри строки автора пробел — как у автора (нормализация решает
+        # остальное); каноническое правило — только на стыке бывших строк.
+        self.assertWrap("Ф(Не(А),\nБ);", ["\tФ(Не(А), Б);"])
+        self.assertWrap("Ф(Не (А),\nБ);", ["\tФ(Не (А), Б);"])
+        self.assertWrap("А = Б И(В Или Г)\nИ Д;", ["\tА = Б И(В Или Г) И Д;"])
+        self.assertWrap("А = --(Х)\n+ 1;", ["\tА = --(Х) + 1;"])
+        # на стыке строк — каноническое правило
+        self.assertWrap("Ф(Не\n(А),\nБ);", ["\tФ(Не (А), Б);"])
+
 
 if __name__ == "__main__":
     unittest.main()

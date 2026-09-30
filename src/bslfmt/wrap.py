@@ -63,6 +63,7 @@ class _Units:
         stack: list[int] = []
         depth = 0
         self.valid = True
+        self.gaps: list[str] = [""] * len(texts)
         for index, text in enumerate(texts):
             if text in ("(", "["):
                 self.depth.append(depth)
@@ -101,6 +102,10 @@ class _Units:
 def _units(code: str) -> _Units | None:
     kinds: list[str] = []
     texts: list[str] = []
+    # Что стояло перед единицей у автора: "" — ничего, " " — пробел в той же
+    # строке, "\n" — перевод строки (стык бывших строк).
+    gaps: list[str] = []
+    gap = ""
     position = 0
     while position < len(code):
         match = _UNIT.match(code, position)
@@ -108,14 +113,20 @@ def _units(code: str) -> _Units | None:
             return None
         position = match.end()
         kind = match.lastgroup
-        if kind != "space":
+        if kind == "space":
+            text = match.group()
+            gap = "\n" if "\n" in text or "\r" in text or gap == "\n" else " "
+        else:
             kinds.append(kind)
             texts.append(match.group())
+            gaps.append(gap)
+            gap = ""
     if not texts:
         return None
     units = _Units(kinds, texts)
     if not units.valid:
         return None
+    units.gaps = gaps
     for index in range(1, len(texts)):
         # Подряд идущие литералы — многострочная строка (справка 1С,
         # «Строка»): переносы между ними не трогаем.
@@ -167,8 +178,13 @@ def _render(units: _Units, start: int, stop: int, normalize) -> str:
         (units.kinds[start] == "op" and units.texts[start] == "+") or
         (units.kinds[start] == "word" and units.folded[start] in ("и", "and", "или", "or"))
     )
+    gaps = units.gaps
     for index in range(start + 1, stop):
-        if _needs_space(units, index - 1, index) or (lead_operator and index == start + 1):
+        # Внутри строки автора — его пробел (дальше решает нормализация, как
+        # для той же инструкции в одну строку); на стыке строк — правило.
+        gap = gaps[index]
+        if (gap == " " or (gap == "\n" and _needs_space(units, index - 1, index))
+                or (lead_operator and index == start + 1)):
             pieces.append(" ")
         pieces.append(units.texts[index])
     return normalize("".join(pieces))

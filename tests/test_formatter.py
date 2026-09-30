@@ -1451,6 +1451,36 @@ class FormatterTests(unittest.TestCase):
         self.assertFalse(result.endswith("\n"))
         self.assertEqual(format_code(result), result)
 
+    def test_author_spaces_inside_line_do_not_depend_on_breaks(self):
+        # Перевод строки вместо пробела автора (и после «,»/«(») даёт то же,
+        # что инструкция в одну строку (Ruling 4).
+        statements = (
+            "Ф(Не(А), Б);",
+            "Ф(Не (А), Б);",
+            "А = Б И(В Или Г) И Д;",
+            "А = --(Х) + Ф(1, 2);",
+            "Массив = Новый Массив(Ф(А), Б);",
+            "Если Не(А = 1) И Б Тогда",
+        )
+        for statement in statements:
+            closing = "\nКонецЕсли;" if statement.endswith("Тогда") else ""
+            base = format_code(f"Процедура П()\n{statement}{closing}\nКонецПроцедуры\n")
+            self.assertEqual(format_code(base), base)
+            positions = [i for i, char in enumerate(statement) if char in " ,("]
+            for position in positions:
+                if statement[:position].endswith("Новый"):
+                    # Строка «Массив(…)» после «… = Новый» — новая инструкция
+                    # (спека, часть 1: граница, а не пробелы).
+                    continue
+                if statement[position] == " ":
+                    variant = statement[:position] + "\n" + statement[position + 1:]
+                else:
+                    variant = statement[:position + 1] + "\n" + statement[position + 1:]
+                with self.subTest(statement=statement, position=position):
+                    result = format_code(f"Процедура П()\n{variant}{closing}\nКонецПроцедуры\n")
+                    self.assertEqual(result, base)
+                    self.assertEqual(format_code(result), result)
+
     def test_layout_does_not_depend_on_author_breaks(self):
         # Свойство: переводы строк на границах токенов внутри инструкции не
         # меняют результат (детерминированный перебор позиций).
