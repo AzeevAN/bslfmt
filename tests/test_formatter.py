@@ -1451,6 +1451,32 @@ class FormatterTests(unittest.TestCase):
         self.assertFalse(result.endswith("\n"))
         self.assertEqual(format_code(result), result)
 
+    def test_wrap_outside_patch_region(self):
+        long = ", ".join(f"ПараметрНомер{i}" for i in range(9))
+        source = (
+            "Процедура П()\n"
+            "#Вставка\n"
+            f"Ф({long});\n"
+            "#КонецВставки\n"
+            f"Г({long});\n"
+            "А = Б\n"
+            "+ В;\n"
+            "КонецПроцедуры\n"
+        )
+        result = format_code(source)
+        self.assertIn(f"#Вставка\nФ({long});\n#КонецВставки\n", result)
+        expected = (
+            "\tГ(\n"
+            + "".join(f"\t\tПараметрНомер{i},\n" for i in range(8))
+            + "\t\tПараметрНомер8\n\t);\n"
+        )
+        self.assertIn(expected, result)
+        self.assertIn("\tА = Б + В;\n", result)
+        self.assertEqual(format_code(result), result)
+        stripped = format_code(source.replace("А = Б\n", "А = Б\n// удалить\n"), strip_body_comments=True)
+        self.assertIn("\tА = Б + В;\n", stripped)
+        self.assertEqual(format_code(stripped, strip_body_comments=True), stripped)
+
     def test_author_spaces_inside_line_do_not_depend_on_breaks(self):
         # Перевод строки вместо пробела автора (и после «,»/«(») даёт то же,
         # что инструкция в одну строку (Ruling 4).
