@@ -121,6 +121,9 @@ def _units(code: str) -> _Units | None:
         # «Строка»): переносы между ними не трогаем.
         if kinds[index] == "string" and kinds[index - 1] == "string":
             return None
+        # Двойной слэш — комментарий; не раскладываем.
+        if texts[index] == "/" and texts[index - 1] == "/":
+            return None
         if (kinds[index] == "word" and texts[index - 1] != "."
                 and units.folded[index] in _STRUCTURAL_INSIDE):
             return None
@@ -158,8 +161,12 @@ def _needs_space(units: _Units, left: int, right: int) -> bool:
 def _render(units: _Units, start: int, stop: int, normalize) -> str:
     """Каноническая строка из единиц [start, stop)."""
     pieces = [units.texts[start]]
-    lead_operator = units.kinds[start] == "op" or (
-        units.kinds[start] == "word" and units.folded[start] in ("и", "and", "или", "or"))
+    # Пробел после ведущего оператора нужен только для операторов-разрезов
+    # шага 1 (+, И/Или/AND/OR). Унарные - и другие операторы пробел не получают.
+    lead_operator = (
+        (units.kinds[start] == "op" and units.texts[start] == "+") or
+        (units.kinds[start] == "word" and units.folded[start] in ("и", "and", "или", "or"))
+    )
     for index in range(start + 1, stop):
         if _needs_space(units, index - 1, index) or (lead_operator and index == start + 1):
             pieces.append(" ")
@@ -304,7 +311,8 @@ def wrap_statement(code: str, depth: int, normalize) -> list[str] | None:
 
     code — код инструкции без комментария в конце (переносы и пробелы
     автора допустимы), depth — глубина отступа первой строки. normalize —
-    _normalize_spacing форматтера для одной строки кода.
+    _normalize_spacing форматтера для одной строки кода. Код с двойным слэшем
+    (//) не раскладывается и возвращает None.
     """
     if len(code) > MAX_STATEMENT_CHARS:
         return None

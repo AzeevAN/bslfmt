@@ -149,6 +149,23 @@ class WrapTests(unittest.TestCase):
         self.assertIsNotNone(wrap(big))
         self.assertLess(time.perf_counter() - started, 0.5)
 
+    def test_unary_minus_in_parameters_no_space(self):
+        # Параметр с унарным минусом не должен иметь пробел после минуса.
+        # Разрез 2б заставляет параметры на отдельные строки.
+        long_param = "Ж" * 60
+        result = wrap(f"Ф(-{long_param}, -{long_param}, Б);")
+        self.assertEqual(result[1], f"\t\t-{long_param},")
+        self.assertEqual(result[2], f"\t\t-{long_param},")
+        # Повторная раскладка даёт тот же результат.
+        self.assertEqual(wrap("\n".join(result)), result)
+
+    def test_comments_with_slashes_are_left(self):
+        # Код с двойным слэшем (комментарий) не раскладывается.
+        self.assertIsNone(wrap("А = Ф(Б, В); // комментарий"))
+        # Длинный код с комментарием в конце.
+        long_code = "А = " + "Б + " * 30 + "В; // это комментарий"
+        self.assertIsNone(wrap(long_code))
+
 
 if __name__ == "__main__":
     unittest.main()
