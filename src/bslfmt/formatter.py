@@ -422,15 +422,18 @@ class _Position:
 def _format_active_code(
     source: str, max_depth: int | None, tokens=None, collapse_blank_lines: bool = False,
     stripped: set[int] | None = None, keep_line_count: bool = False, masked=None,
+    joins: list[tuple[int, int]] | None = None,
 ) -> str:
     """Выравнять только отступы распознанных блоков; при сомнении отказать.
 
     masked — готовый результат _masked_code(source, tokens), если он есть.
+    joins — куда записать заголовки для склейки (номера первой и последней
+    строки, с 0) вместо склейки на месте: в режиме keep_line_count.
     """
     cursor = _Position()
     try:
         return _LineFormatter(
-            source, max_depth, cursor, tokens, stripped, keep_line_count, masked
+            source, max_depth, cursor, tokens, stripped, keep_line_count, masked, joins
         ).run(collapse_blank_lines)
     except FormatError as error:
         if error.line is None and cursor.line is not None:
@@ -574,12 +577,46 @@ def _reindent(line: str, depth: int) -> str:
     return "\t" * depth + line[leading:]
 
 
+# Склейка заголовков (решение владельца 2026-09-30, по образцу Black): заголовок
+# Если/ИначеЕсли … Тогда, Пока/Для … Цикл, который вместе с отступом
+# помещается в строку, собирается в одну строку. Таб считается за 4 знака.
+LINE_WIDTH = 120
+TAB_WIDTH = 4
+
+
+def _joined_header(lines: list[str]) -> str | None:
+    """Строки заголовка одной строкой или None, если она длиннее LINE_WIDTH.
+
+    Пустые строки выпадают; на стыке пробел, кроме как у скобок, точки и
+    запятой. Остальные пробелы выравнивает _normalize_spacing — по ней же
+    считается ширина (с отступом и комментарием в конце). Хвост последней
+    строки не срезается: там может быть комментарий с пробелами в конце.
+    """
+    joined = lines[0].rstrip(" \t\f\r\n")
+    last = len(lines) - 1
+    for index, line in enumerate(lines[1:], 1):
+        piece = line.rstrip("\r\n").lstrip(" \t\f")
+        if index != last:
+            piece = piece.rstrip(" \t\f")
+        if not piece.strip(" \t\f"):
+            continue
+        if joined.endswith(("(", "[", ".")) or piece.startswith((")", "]", ",", ".")):
+            joined += piece
+        else:
+            joined += " " + piece
+    width = len(_normalize_spacing(joined).rstrip(" \t\f").expandtabs(TAB_WIDTH))
+    if width > LINE_WIDTH:
+        return None
+    return joined + lines[-1][len(lines[-1].rstrip("\r\n")):]
+
+
 class _LineFormatter:
     """Построчный автомат отступов: состояние блоков, скобок и продолжений."""
 
     def __init__(
         self, source: str, max_depth: int | None, cursor: _Position, tokens=None,
         stripped: set[int] | None = None, keep_line_count: bool = False, masked=None,
+        joins: list[tuple[int, int]] | None = None,
     ) -> None:
         # stripped — куда записать номера удалённых строк-комментариев (None —
         # не удалять); keep_line_count — режим областей правки: строка остаётся
@@ -619,12 +656,27 @@ class _LineFormatter:
         self.last_dedent = False
         self.offset = 0
         self.string_index = 0
+        # Многострочный заголовок: индекс его первой строки в result, номер
+        # строки исходника и можно ли его склеить (нет комментариев,
+        # многострочных литералов, директив и областей правки).
+        self.joins = joins
+        self.header_start: int | None = None
+        self.header_line = 0
+        self.header_joinable = False
 
     def run(self, collapse_blank_lines: bool = False) -> str:
         region_lines, conditional_lines = _scan_directives(self.code_lines, self.cursor)
         for number, (line, code) in enumerate(zip(self.lines, self.code_lines)):
             self.cursor.line = number + 1
             inside_string = self._advance(line)
+            if self.pending_header is not None and self.header_joinable and (
+                    inside_string or number in self.opaque_lines
+                    or number in region_lines or number in conditional_lines
+                    or (line.lstrip(" \t\f").startswith("//")
+                        and (self.stripped is None or not self._inside_method()))):
+                # Строка-комментарий, которую удалит strip_body_comments,
+                # склейке не мешает.
+                self.header_joinable = False
             if number in self.opaque_lines:
                 self.return_pending = False
                 self.pending_comments.clear()
@@ -672,7 +724,8 @@ class _LineFormatter:
                     self._pending_header_line(line, code)
                 else:
                     self._statement_line(line, code, number)
-                self._place_comments(self.result[code_index])
+                if self.pending_comments:
+                    self._place_comments(self.result[code_index])
             if not inside_string:
                 self.literal_delta = _lead_width(self.result[-1]) - _lead_width(line)
             if (number not in region_lines and number not in conditional_lines
@@ -867,6 +920,8 @@ class _LineFormatter:
         header_kind, header_depth = self.pending_header
         keywords = _line_keywords(code)
         terminator_end = _header_terminator_end(header_kind, code)
+        if terminator_end is None and self._has_trailing_comment(line, code):
+            self.header_joinable = False
         inline_close = False
         if keywords:
             inline_close = (
@@ -900,6 +955,44 @@ class _LineFormatter:
                 self.stack.pop()
             if not self.brackets and not self.operator_continuation:
                 self.continuation_depth = None
+            if self.header_joinable and not inline_close:
+                self._join_header()
+
+    def _has_trailing_comment(self, line: str, code: str) -> bool:
+        """Есть ли в конце строки кода комментарий (после литералов).
+
+        В маске литералы и комментарий — пробелы, поэтому хвост строки после
+        кода маски состоит только из них.
+        """
+        line_start = self.offset - len(line)
+        position = len(code.rstrip(" \t\f\r\n"))
+        length = len(line)
+        while position < length:
+            char = line[position]
+            if char == '"':
+                index = bisect_left(self.strings, (line_start + position,))
+                if index == len(self.strings):
+                    return False
+                position = self.strings[index][1] - line_start
+            elif char == "'":
+                position = line.find("'", position + 1) + 1 or length
+            elif line.startswith("//", position):
+                return True
+            else:
+                position += 1
+        return False
+
+    def _join_header(self) -> None:
+        """Склеить законченный многострочный заголовок, если он помещается."""
+        start = self.header_start
+        if self.joins is not None:
+            # Режим областей правки: число строк меняется только после сборки,
+            # там же без удаляемых комментариев проверяется ширина.
+            self.joins.append((self.header_line, self.header_line + len(self.result) - start - 1))
+            return
+        joined = _joined_header(self.result[start:])
+        if joined is not None:
+            self.result[start:] = [joined]
 
     def _statement_line(self, line: str, code: str, number: int) -> None:
         after_return = self.return_pending
@@ -965,6 +1058,10 @@ class _LineFormatter:
         if starts_multiline_declaration:
             self.continuation_depth = depth
         self._apply_keywords(code, keywords, depth, number)
+        if self.pending_header is not None:
+            self.header_start = len(self.result) - 1
+            self.header_line = number
+            self.header_joinable = not self._has_trailing_comment(line, code)
         if starts_branch_call and self.brackets:
             self.continuation_depth = len(self.stack)
         if (not self.brackets and self.pending_header is None
@@ -1463,8 +1560,9 @@ def _format_with_patches(
             )
 
     active_source, _ = _active_source(source)
+    joins: list[tuple[int, int]] = []
     formatted = _format_active_code(
-        active_source, max_depth, stripped=stripped, keep_line_count=True
+        active_source, max_depth, stripped=stripped, keep_line_count=True, joins=joins
     )
     source_lines = _split_lines(source)
     formatted_lines = _split_lines(formatted)
@@ -1472,11 +1570,23 @@ def _format_with_patches(
         raise FormatError("форматирование изменило границы строк")
 
     protected = _protected_patch_lines(source)
+    joined_away: set[int] = set()
+    for first, last in joins:
+        if protected.intersection(range(first, last + 1)):
+            continue
+        # Удаляемые strip_body_comments строки-комментарии в склейку не входят.
+        joined = _joined_header([
+            formatted_lines[number] for number in range(first, last + 1)
+            if not stripped or number + 1 not in stripped
+        ])
+        if joined is not None:
+            formatted_lines[first] = joined
+            joined_away.update(range(first + 1, last + 1))
     if stripped:
         # Строки областей правки дословны: комментарии в них не удаляются.
         stripped.difference_update(number + 1 for number in protected)
     return "".join(
         original if number in protected else changed
         for number, (original, changed) in enumerate(zip(source_lines, formatted_lines))
-        if not stripped or number + 1 not in stripped
+        if (not stripped or number + 1 not in stripped) and number not in joined_away
     )

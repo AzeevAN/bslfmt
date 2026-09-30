@@ -15,6 +15,8 @@ from bslfmt.__main__ import main
 
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "style-v0.json"
+# Длинное условие: заголовок с ним не помещается в 120 знаков и не склеивается.
+L = "ОченьДлинноеУсловие" * 7
 
 
 class FormatterTests(unittest.TestCase):
@@ -123,13 +125,13 @@ class FormatterTests(unittest.TestCase):
     def test_multiline_if_can_end_with_inline_statement_and_endif(self):
         source = (
             "Procedure Example()\n"
-            "If FirstCondition\n"
+            f"If {L}\n"
             "Or SecondCondition Then Continue; EndIf;\n"
             "EndProcedure\n"
         )
         expected = (
             "Procedure Example()\n"
-            "\tIf FirstCondition\n"
+            f"\tIf {L}\n"
             "\t\tOr SecondCondition Then\n"
             "\t\tContinue;\n"
             "\tEndIf;\n"
@@ -453,7 +455,7 @@ class FormatterTests(unittest.TestCase):
             "Если Условие Тогда\n"
             "Сообщить(1);\n"
             "ИначеЕсли (\n"
-            "Условие2\n"
+            f"{L}\n"
             ") Тогда\n"
             "Сообщить(2);\n"
             "КонецЕсли;\n"
@@ -464,7 +466,7 @@ class FormatterTests(unittest.TestCase):
             "Если Условие Тогда\n"
             "\tСообщить(1);\n"
             "ИначеЕсли (\n"
-            "\tУсловие2\n"
+            f"\t{L}\n"
             ") Тогда\n"
             "\tСообщить(2);\n"
             "КонецЕсли;\n"
@@ -1097,13 +1099,13 @@ class FormatterTests(unittest.TestCase):
 
     def test_condition_continuation_gets_at_least_one_extra_indent(self):
         cases = (
-            ("Процедура П()\nЕсли А\nИ Б\nИли В Тогда\nГ = 1;\nИначеЕсли Д\nИ Е Тогда\nКонецЕсли;\n"
-             "Пока А\nИ Б Цикл\nКонецЦикла;\nКонецПроцедуры\n",
-             "Процедура П()\n\tЕсли А\n\t\tИ Б\n\t\tИли В Тогда\n\t\tГ = 1;\n\tИначеЕсли Д\n"
-             "\t\tИ Е Тогда\n\tКонецЕсли;\n\tПока А\n\t\tИ Б Цикл\n\tКонецЦикла;\nКонецПроцедуры\n"),
+            (f"Процедура П()\nЕсли {L}\nИ Б\nИли В Тогда\nГ = 1;\nИначеЕсли {L}\nИ Е Тогда\nКонецЕсли;\n"
+             f"Пока {L}\nИ Б Цикл\nКонецЦикла;\nКонецПроцедуры\n",
+             f"Процедура П()\n\tЕсли {L}\n\t\tИ Б\n\t\tИли В Тогда\n\t\tГ = 1;\n\tИначеЕсли {L}\n"
+             f"\t\tИ Е Тогда\n\tКонецЕсли;\n\tПока {L}\n\t\tИ Б Цикл\n\tКонецЦикла;\nКонецПроцедуры\n"),
             # выравнивание по первому условию (глубже +1) сохраняется
-            ("Процедура П()\n\tЕсли А\n\t     И Б Тогда\n\tКонецЕсли;\nКонецПроцедуры\n",
-             "Процедура П()\n\tЕсли А\n\t     И Б Тогда\n\tКонецЕсли;\nКонецПроцедуры\n"),
+            (f"Процедура П()\n\tЕсли {L}\n\t     И Б Тогда\n\tКонецЕсли;\nКонецПроцедуры\n",
+             f"Процедура П()\n\tЕсли {L}\n\t     И Б Тогда\n\tКонецЕсли;\nКонецПроцедуры\n"),
         )
         for source, expected in cases:
             with self.subTest(source=source):
@@ -1113,8 +1115,8 @@ class FormatterTests(unittest.TestCase):
     def test_deeper_continuation_moves_with_its_statement(self):
         cases = (
             # инструкция сдвинулась влево — продолжения за ней
-            ("Процедура П()\n\t\t\tЕсли А\n\t\t\t\tИ Б Тогда\n\t\t\t\tВ = 1;\n\t\t\tКонецЕсли;\nКонецПроцедуры\n",
-             "Процедура П()\n\tЕсли А\n\t\tИ Б Тогда\n\t\tВ = 1;\n\tКонецЕсли;\nКонецПроцедуры\n"),
+            (f"Процедура П()\n\t\t\tЕсли {L}\n\t\t\t\tИ Б Тогда\n\t\t\t\tВ = 1;\n\t\t\tКонецЕсли;\nКонецПроцедуры\n",
+             f"Процедура П()\n\tЕсли {L}\n\t\tИ Б Тогда\n\t\tВ = 1;\n\tКонецЕсли;\nКонецПроцедуры\n"),
             ("Процедура П()\n\t\tС = Новый Структура(\"А, Б\",\n\t\t\tЗначение1,\n\t\t\tЗначение2);\nКонецПроцедуры\n",
              "Процедура П()\n\tС = Новый Структура(\"А, Б\",\n\t\tЗначение1,\n\t\tЗначение2);\nКонецПроцедуры\n"),
             # вправо: выравнивание под скобку едет вместе со скобкой
@@ -1280,6 +1282,122 @@ class FormatterTests(unittest.TestCase):
                 self.assertEqual(format_code(expected), expected)
                 crlf = format_code(source.replace("\n", "\r\n"))
                 self.assertEqual(crlf, expected.replace("\n", "\r\n"))
+
+    def test_short_headers_are_joined(self):
+        # Заголовок Если/ИначеЕсли/Пока/Для, который вместе с отступом (таб —
+        # 4 знака) помещается в 120 знаков, собирается в одну строку, пустые
+        # строки внутри убираются (решение владельца 2026-09-30).
+        cases = (
+            ("Процедура П()\nДля Каждого Стр Из Таблица\n\nЦикл\nА = 1;\nКонецЦикла;\nКонецПроцедуры\n",
+             "Процедура П()\n\tДля Каждого Стр Из Таблица Цикл\n\t\tА = 1;\n\tКонецЦикла;\nКонецПроцедуры\n"),
+            ("Процедура П()\nЕсли А\nИ Б Тогда\nВ();\nИначеЕсли Г\nИли Д\nТогда\nЕ();\nКонецЕсли;\nКонецПроцедуры\n",
+             "Процедура П()\n\tЕсли А И Б Тогда\n\t\tВ();\n\tИначеЕсли Г Или Д Тогда\n\t\tЕ();\n"
+             "\tКонецЕсли;\nКонецПроцедуры\n"),
+            ("Пока (А\nИ Б) Цикл\nВ();\nКонецЦикла;\n",
+             "Пока (А И Б) Цикл\n\tВ();\nКонецЦикла;\n"),
+            ("Для Сч = 1\nПо 10 Цикл\nВ();\nКонецЦикла;\n",
+             "Для Сч = 1 По 10 Цикл\n\tВ();\nКонецЦикла;\n"),
+            # скобки и точка стыкуются без пробела; комментарий после Тогда — в конце
+            ("Если Ф(\nА,\nБ\n) Тогда // к\nВ();\nКонецЕсли;\n",
+             "Если Ф(А, Б) Тогда // к\n\tВ();\nКонецЕсли;\n"),
+            ("If A\nAnd B Then\nC();\nEndIf;\n",
+             "If A And B Then\n\tC();\nEndIf;\n"),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(format_code(source), expected)
+                self.assertEqual(format_code(expected), expected)
+                crlf = format_code(source.replace("\n", "\r\n"))
+                self.assertEqual(crlf, expected.replace("\n", "\r\n"))
+
+    def test_header_join_limit_is_120_with_tab_as_4(self):
+        # Отступ 1 таб = 4 знака: 4 + 116 = 120 — склеивается, 121 — нет.
+        for width, joined in ((120, True), (121, False)):
+            name = "Ж" * (width - len("\tЕсли  И Б Тогда".expandtabs(4)))
+            source = f"Процедура П()\nЕсли {name}\nИ Б Тогда\nВ();\nКонецЕсли;\nКонецПроцедуры\n"
+            one_line = f"\tЕсли {name} И Б Тогда\n"
+            with self.subTest(width=width):
+                self.assertEqual(len(one_line.rstrip("\n").expandtabs(4)), width)
+                result = format_code(source)
+                self.assertEqual(one_line in result, joined)
+                self.assertEqual(format_code(result), result)
+
+    def test_header_join_counts_trailing_comment(self):
+        name = "Ж" * 102
+        source = f"Если {name}\nИ Б Тогда // комментарий до предела\nВ();\nКонецЕсли;\n"
+        expected = f"Если {name}\n\tИ Б Тогда // комментарий до предела\n\tВ();\nКонецЕсли;\n"
+        self.assertEqual(format_code(source), expected)
+
+    def test_header_join_keeps_comment_text_verbatim(self):
+        # Хвостовые табы внутри комментария — его текст: склейка их не срезает.
+        source = "Если А\n\t\t\t\tИ\tБ\t\tТогда\t// к\t\t\t\t\nВ();\nКонецЕсли;\n"
+        expected = "Если А И Б Тогда // к\t\t\t\t\n\tВ();\nКонецЕсли;\n"
+        self.assertEqual(format_code(source), expected)
+        self.assertEqual(format_code(expected), expected)
+
+    def test_headers_that_cannot_be_joined_keep_author_breaks(self):
+        cases = (
+            # комментарий внутри заголовка
+            "Если А // почему\n\tИ Б Тогда\n\tВ();\nКонецЕсли;\n",
+            "Если А\n\t// почему\n\tИ Б Тогда\n\tВ();\nКонецЕсли;\n",
+            # многострочный литерал внутри заголовка
+            "Если А = \"строка\n\t|вторая\" Тогда\n\tВ();\nКонецЕсли;\n",
+            # директива препроцессора внутри заголовка
+            "Если А\n#Если Сервер Тогда\n\tИ Б\n#КонецЕсли\n\tТогда\n\tВ();\nКонецЕсли;\n",
+            # препроцессор не трогаем
+            "#Если Сервер\nИли Клиент Тогда\n#КонецЕсли\n",
+        )
+        for source in cases:
+            with self.subTest(source=source):
+                self.assertEqual(format_code(source), source)
+
+    def test_header_join_keeps_patch_regions_verbatim(self):
+        source = (
+            "Процедура П()\n"
+            "#Вставка\n"
+            "Если А\n"
+            "И Б Тогда\n"
+            "В();\n"
+            "КонецЕсли;\n"
+            "#КонецВставки\n"
+            "Если Г\n"
+            "И Д Тогда\n"
+            "Е();\n"
+            "КонецЕсли;\n"
+            "КонецПроцедуры\n"
+        )
+        expected = (
+            "Процедура П()\n"
+            "#Вставка\n"
+            "Если А\n"
+            "И Б Тогда\n"
+            "В();\n"
+            "КонецЕсли;\n"
+            "#КонецВставки\n"
+            "\tЕсли Г И Д Тогда\n"
+            "\t\tЕ();\n"
+            "\tКонецЕсли;\n"
+            "КонецПроцедуры\n"
+        )
+        self.assertEqual(format_code(source), expected)
+        self.assertEqual(format_code(expected), expected)
+
+    def test_header_join_with_strip_body_comments(self):
+        source = "Процедура П()\n// удалить\nЕсли А\n\nИ Б Тогда\nВ();\nКонецЕсли;\nКонецПроцедуры\n"
+        expected = "Процедура П()\n\tЕсли А И Б Тогда\n\t\tВ();\n\tКонецЕсли;\nКонецПроцедуры\n"
+        self.assertEqual(format_code(source, strip_body_comments=True), expected)
+        # Строка-комментарий внутри заголовка удаляется -sbc и склейке не
+        # мешает: иначе склейка случилась бы только при повторном прогоне.
+        for source in (
+            "Процедура П()\nЕсли А\n// удалить\nИ Б Тогда\nВ();\nКонецЕсли;\nКонецПроцедуры\n",
+            "Процедура П()\n#Вставка\nГ();\n#КонецВставки\nЕсли А\n// удалить\nИ Б Тогда\nВ();\n"
+            "КонецЕсли;\nКонецПроцедуры\n",
+        ):
+            with self.subTest(source=source):
+                result = format_code(source, strip_body_comments=True)
+                self.assertIn("\tЕсли А И Б Тогда\n", result)
+                self.assertNotIn("удалить", result)
+                self.assertEqual(format_code(result, strip_body_comments=True), result)
 
     def test_split_does_not_depend_on_dotted_capital_i(self):
         # «İ» (U+0130) — единственный символ, у которого lower() длиннее
@@ -1484,7 +1602,7 @@ class FormatterTests(unittest.TestCase):
     def test_multiline_while_header(self):
         source = (
             "Процедура Пример()\n"
-            "Пока (УсловиеА\n"
+            f"Пока ({L}\n"
             "И УсловиеБ) Цикл\n"
             "Обработать();\n"
             "КонецЦикла;\n"
@@ -1492,7 +1610,7 @@ class FormatterTests(unittest.TestCase):
         )
         expected = (
             "Процедура Пример()\n"
-            "\tПока (УсловиеА\n"
+            f"\tПока ({L}\n"
             "\t\tИ УсловиеБ) Цикл\n"
             "\t\tОбработать();\n"
             "\tКонецЦикла;\n"

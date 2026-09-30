@@ -11,6 +11,10 @@ permissions:
   contents: read
 
 jobs:
+  # Полный набор тестов (Windows, macOS, Linux) — до публикации.
+  tests:
+    uses: ./.github/workflows/tests.yml
+
   build:
     runs-on: ubuntu-latest
     steps:
@@ -69,7 +73,7 @@ jobs:
         run: python tests/cli_smoke.py
 
   publish-pypi:
-    needs: install-check
+    needs: [tests, install-check]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     environment: pypi

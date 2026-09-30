@@ -5,6 +5,8 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+  # Вызывается из release.yml: публикация ждёт тестов на всех ОС.
+  workflow_call:
 
 jobs:
   test:
