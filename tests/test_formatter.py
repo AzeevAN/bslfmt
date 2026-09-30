@@ -20,6 +20,37 @@ L = "ОченьДлинноеУсловие" * 7
 
 
 class FormatterTests(unittest.TestCase):
+    def test_leading_operator_lines_are_continuations(self):
+        cases = (
+            ("Процедура П()\nА = Б\n\t\t+ В;\nКонецПроцедуры\n",
+             "Процедура П()\n\tА = Б\n\t\t+ В;\nКонецПроцедуры\n"),
+            ("Функция Ф()\nВозврат А\nИли Б;\nКонецФункции\n",
+             "Функция Ф()\n\tВозврат А\n\t\tИли Б;\nКонецФункции\n"),
+            ("Процедура П()\nА = Б\n.В;\nКонецПроцедуры\n",
+             "Процедура П()\n\tА = Б\n\t\t.В;\nКонецПроцедуры\n"),
+            ("Процедура П()\nА = Ф(Б)\n[0];\nКонецПроцедуры\n",
+             "Процедура П()\n\tА = Ф(Б)\n\t\t[0];\nКонецПроцедуры\n"),
+            ("If A\nThen\nB = C\nAND D;\nEndIf;\n",
+             "If A Then\n\tB = C\n\t\tAND D;\nEndIf;\n"),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                # До Task 3 (раскладка) проверяются только отступы.
+                self.assertEqual(format_code(source), expected)
+                self.assertEqual(format_code(expected), expected)
+
+    def test_statement_after_semicolon_or_block_word_is_not_continuation(self):
+        source = "Процедура П()\nЕсли А Тогда\nБ = 1;\nИначе\nВ = 2;\nКонецЕсли;\nКонецПроцедуры\n"
+        expected = ("Процедура П()\n\tЕсли А Тогда\n\t\tБ = 1;\n\tИначе\n\t\tВ = 2;\n"
+                    "\tКонецЕсли;\nКонецПроцедуры\n")
+        self.assertEqual(format_code(source), expected)
+
+    def test_export_on_own_line_continues_declaration(self):
+        source = "Процедура П(А,\nБ)\nЭкспорт\nВ = 1;\nКонецПроцедуры\n"
+        result = format_code(source)
+        self.assertIn("\tЭкспорт\n\tВ = 1;\n", result)
+        self.assertEqual(format_code(result), result)
+
     def test_golden_pairs_and_idempotency(self):
         cases = json.loads(FIXTURES.read_text(encoding="utf-8"))
         self.assertEqual(len(cases), len({case["id"] for case in cases}))
@@ -1087,7 +1118,7 @@ class FormatterTests(unittest.TestCase):
              "Процедура П()\n\tЕсли А Тогда\n\t\tВозврат\n\tИначе\n\t\tВозврат\n\tКонецЕсли;\nКонецПроцедуры\n"),
             # свойство .Возврат — не оператор
             ("Процедура П()\nСтруктура.Возврат\n= 1;\nКонецПроцедуры\n",
-             "Процедура П()\n\tСтруктура.Возврат\n\t= 1;\nКонецПроцедуры\n"),
+             "Процедура П()\n\tСтруктура.Возврат\n\t\t= 1;\nКонецПроцедуры\n"),
             # английские слова и CRLF
             ("Function F()\r\nIf A Then\r\nReturn\r\nEndIf;\r\nReturn\r\nA;\r\nEndFunction\r\n",
              "Function F()\r\n\tIf A Then\r\n\t\tReturn\r\n\tEndIf;\r\n\tReturn\r\n\t\tA;\r\nEndFunction\r\n"),

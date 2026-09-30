@@ -460,6 +460,28 @@ def _ends_with_bare_return(code_tail: str) -> bool:
     return False
 
 
+_CONTINUATION_WORDS = frozenset({"и", "или", "and", "or"})
+_CONTINUATION_START = re.compile(r"[ \t\f]*(?:[-+*/%=<>.\[,)\"']|<>|<=|>=)")
+_BLOCK_END_WORDS = frozenset({
+    "тогда", "then", "цикл", "do", "иначе", "else", "попытка", "try",
+    "исключение", "except", "конецесли", "endif", "конеццикла", "enddo",
+    "конецпопытки", "endtry", "конецпроцедуры", "endprocedure",
+    "конецфункции", "endfunction",
+})
+
+
+def _starts_continuation(line: str, code: str) -> bool:
+    """Начинается ли строка с того, что не может начать инструкцию BSL.
+
+    Бинарный оператор, «.», «[», «,», «)» или литерал (по исходной строке:
+    в маске литерал — пробелы).
+    """
+    if _CONTINUATION_START.match(line):
+        return True
+    match = _IDENTIFIER.match(code.lstrip(" \t\f"))
+    return bool(match) and match.group().casefold() in _CONTINUATION_WORDS
+
+
 def _scan_directives(
     code_lines: list[str], cursor: _Position
 ) -> tuple[set[int], dict[int, str]]:
@@ -637,6 +659,14 @@ class _LineFormatter:
         self.brackets: list[str] = []
         self.operator_continuation = False
         self.continuation_depth: int | None = None
+        # Предыдущая строка кода могла не закончить инструкцию (нет «;» и
+        # структурного слова в конце), и глубина её первой строки.
+        self.statement_open = False
+        self.statement_depth_for_continuation = 0
+        # Предыдущая строка — объявление метода без «;», «Экспорт» на
+        # следующей строке продолжает его.
+        self.declaration_open = False
+        self.in_declaration = False
         self.pending_header: tuple[str, int] | None = None
         self.result: list[str] = []
         # На сколько колонок сдвинулась строка, где начался литерал: строки «|»
@@ -731,6 +761,14 @@ class _LineFormatter:
             if (number not in region_lines and number not in conditional_lines
                     and number not in self.opaque_lines):
                 self._note_line_end(line, code, inside_string)
+                if inside_string or (line.strip(" \t\f\r\n")
+                                     and not line.lstrip(" \t\f").startswith("//")):
+                    self._note_statement_end(code, number, inside_string)
+            elif number in region_lines or number in conditional_lines or (
+                    number in self.opaque_lines):
+                self.statement_open = False
+                self.declaration_open = False
+                self.in_declaration = False
         self._finish()
         return _normalize_spacing("".join(self.result), collapse_blank_lines)
 
@@ -832,6 +870,30 @@ class _LineFormatter:
             self.value_expected = (
                 code_tail.endswith("=") or _ends_with_bare_return(code_tail)
             )
+
+    def _note_statement_end(self, code: str, number: int, inside_string: bool) -> None:
+        """Запомнить, могла ли инструкция остаться незаконченной (нет «;»)."""
+        tail = code.rstrip(" \t\f\r\n")
+        if not tail:
+            if inside_string:
+                # Литерал кончился в конце строки: инструкцию может продолжить
+                # следующая строка.
+                self.statement_open = True
+            return
+        last_word = _IDENTIFIER.findall(tail[-32:])
+        block_end = bool(last_word) and last_word[-1].casefold() in _BLOCK_END_WORDS
+        self.statement_open = not tail.endswith(";") and not block_end
+        top = self.stack[-1] if self.stack else None
+        declaration_line = (
+            top is not None and len(self.stack) == 1
+            and top.opener in {"Процедура", "Функция"} and top.line == number + 1
+        )
+        if declaration_line or self.in_declaration:
+            self.declaration_open = self.statement_open and not self.brackets
+            self.in_declaration = bool(self.brackets)
+        else:
+            self.declaration_open = False
+            self.in_declaration = False
 
     # Виды строк
 
@@ -1004,6 +1066,22 @@ class _LineFormatter:
             # Значение одиночного Возврат — продолжение его инструкции.
             self.continuation_depth = len(self.stack)
             was_continuation = True
+        leading = (self.statement_open and not was_continuation
+                   and self.pending_header is None and _starts_continuation(line, code))
+        export_tail = (self.declaration_open and not was_continuation
+                       and code.strip(" \t\f\r\n").casefold() in {"экспорт", "export"})
+        if leading or export_tail:
+            # Продолжение инструкции предыдущей строки (спека wrap, часть 1).
+            self.continuation_depth = self.statement_depth_for_continuation
+            # Строка не выровнена по операнду первой строки: сдвиг её отступа
+            # не переносится.
+            self.statement_delta = 0
+            trailing_operator = _TRAILING_OPERATOR.search(code)
+            if trailing_operator and self._literal_starts_between(
+                    self.offset - len(line) + trailing_operator.start(), self.offset):
+                trailing_operator = None
+            self._continuation_line(line, keywords, True, trailing_operator)
+            return
         first_keyword = keywords[0][0] if keywords else ""
         starts_multiline_condition = (
             first_keyword in {"Если", "ИначеЕсли"}
@@ -1054,6 +1132,7 @@ class _LineFormatter:
         # Вне блоков (аннотации, переменные и код модуля) — колонка 0 (std456 п.5.1).
         self.result.append(_reindent(line, depth))
         self.statement_delta = _lead_width(self.result[-1]) - _lead_width(line)
+        self.statement_depth_for_continuation = depth
 
         if starts_multiline_declaration:
             self.continuation_depth = depth
@@ -1099,6 +1178,7 @@ class _LineFormatter:
         else:
             # Первая строка многострочной инструкции — на уровне инструкции.
             self.result.append(_reindent(line, self.continuation_depth))
+            self.statement_depth_for_continuation = self.continuation_depth
             self.statement_delta = _lead_width(self.result[-1]) - _lead_width(line)
         self.operator_continuation = bool(trailing_operator) and not self.brackets
         if not self.brackets and not self.operator_continuation:
