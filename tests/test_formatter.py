@@ -21,21 +21,22 @@ L = "ОченьДлинноеУсловие" * 7
 
 class FormatterTests(unittest.TestCase):
     def test_leading_operator_lines_are_continuations(self):
+        # Строка с ведущим оператором продолжает инструкцию: раскладка
+        # собирает её в одну строку, если она помещается в 120 знаков.
         cases = (
             ("Процедура П()\nА = Б\n\t\t+ В;\nКонецПроцедуры\n",
-             "Процедура П()\n\tА = Б\n\t\t+ В;\nКонецПроцедуры\n"),
+             "Процедура П()\n\tА = Б + В;\nКонецПроцедуры\n"),
             ("Функция Ф()\nВозврат А\nИли Б;\nКонецФункции\n",
-             "Функция Ф()\n\tВозврат А\n\t\tИли Б;\nКонецФункции\n"),
+             "Функция Ф()\n\tВозврат А Или Б;\nКонецФункции\n"),
             ("Процедура П()\nА = Б\n.В;\nКонецПроцедуры\n",
-             "Процедура П()\n\tА = Б\n\t\t.В;\nКонецПроцедуры\n"),
+             "Процедура П()\n\tА = Б.В;\nКонецПроцедуры\n"),
             ("Процедура П()\nА = Ф(Б)\n[0];\nКонецПроцедуры\n",
-             "Процедура П()\n\tА = Ф(Б)\n\t\t[0];\nКонецПроцедуры\n"),
+             "Процедура П()\n\tА = Ф(Б)[0];\nКонецПроцедуры\n"),
             ("If A\nThen\nB = C\nAND D;\nEndIf;\n",
-             "If A Then\n\tB = C\n\t\tAND D;\nEndIf;\n"),
+             "If A Then\n\tB = C AND D;\nEndIf;\n"),
         )
         for source, expected in cases:
             with self.subTest(source=source):
-                # До Task 3 (раскладка) проверяются только отступы.
                 self.assertEqual(format_code(source), expected)
                 self.assertEqual(format_code(expected), expected)
 
@@ -48,8 +49,21 @@ class FormatterTests(unittest.TestCase):
     def test_export_on_own_line_continues_declaration(self):
         source = "Процедура П(А,\nБ)\nЭкспорт\nВ = 1;\nКонецПроцедуры\n"
         result = format_code(source)
-        self.assertIn("\tЭкспорт\n\tВ = 1;\n", result)
+        self.assertEqual(result, "Процедура П(А, Б) Экспорт\n\tВ = 1;\nКонецПроцедуры\n")
         self.assertEqual(format_code(result), result)
+
+    def test_label_and_annotation_end_statement(self):
+        # Метка и аннотация — границы инструкции: строка после них с ведущим
+        # знаком не продолжает их.
+        cases = (
+            ("Процедура П()\n~М:\n+ В;\nКонецПроцедуры\n",
+             "Процедура П()\n\t~М:\n\t+ В;\nКонецПроцедуры\n"),
+            ("&НаСервере\n.В;\n", "&НаСервере\n.В;\n"),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(format_code(source), expected)
+                self.assertEqual(format_code(expected), expected)
 
     def test_golden_pairs_and_idempotency(self):
         cases = json.loads(FIXTURES.read_text(encoding="utf-8"))
@@ -1004,7 +1018,13 @@ class FormatterTests(unittest.TestCase):
                 self.assertEqual(formatter._normalize_spacing(expected + "\n"), expected + "\n")
         self.assertEqual(
             format_code("Процедура П()\nФ(1,\n  2 ,3\n  );\nКонецПроцедуры\n#Если Сервер Тогда // а,б\n#КонецЕсли\n"),
-            "Процедура П()\n\tФ(1,\n\t\t2, 3\n\t);\nКонецПроцедуры\n#Если Сервер Тогда // а,б\n#КонецЕсли\n",
+            "Процедура П()\n\tФ(1, 2, 3);\nКонецПроцедуры\n#Если Сервер Тогда // а,б\n#КонецЕсли\n",
+        )
+        # Инструкция с комментарием внутри не раскладывается: пробелы
+        # нормализуются в её строках.
+        self.assertEqual(
+            format_code("Процедура П()\nФ(1, // к\n  2 ,3\n  );\nКонецПроцедуры\n"),
+            "Процедура П()\n\tФ(1, // к\n\t\t2, 3\n\t);\nКонецПроцедуры\n",
         )
 
     def test_significant_check_splits_code_into_words_and_signs(self):
@@ -1058,20 +1078,25 @@ class FormatterTests(unittest.TestCase):
 
     def test_continuation_lines_get_at_least_one_extra_indent(self):
         cases = (
-            # параметры и выражение — +1 к уровню инструкции
+            # параметры и выражение — +1 к уровню инструкции (раскладка
+            # длинной инструкции; короткая собирается в одну строку)
+            (f"Процедура П()\nФ({L},\n2,\n3);\nА = {L} +\nВ;\nКонецПроцедуры\n",
+             f"Процедура П()\n\tФ(\n\t\t{L},\n\t\t2,\n\t\t3\n\t);\n\tА = {L}\n\t\t+ В;\nКонецПроцедуры\n"),
             ("Процедура П()\nФ(1,\n2,\n3);\nА = Б +\nВ;\nКонецПроцедуры\n",
-             "Процедура П()\n\tФ(1,\n\t\t2,\n\t\t3);\n\tА = Б +\n\t\tВ;\nКонецПроцедуры\n"),
+             "Процедура П()\n\tФ(1, 2, 3);\n\tА = Б + В;\nКонецПроцедуры\n"),
+            # в инструкции, которая не раскладывается (комментарий внутри),
             # более глубокое выравнивание (под скобку) сохраняется дословно
-            ("Процедура П()\n\tСообщ = Ф(А,\n\t          Б);\nКонецПроцедуры\n",
-             "Процедура П()\n\tСообщ = Ф(А,\n\t          Б);\nКонецПроцедуры\n"),
+            ("Процедура П()\n\tСообщ = Ф(А, // к\n\t          Б);\nКонецПроцедуры\n",
+             "Процедура П()\n\tСообщ = Ф(А, // к\n\t          Б);\nКонецПроцедуры\n"),
             # закрывающая скобка на своей строке — на уровне инструкции
-            ("Процедура П()\nФ(\nА\n);\nКонецПроцедуры\n",
-             "Процедура П()\n\tФ(\n\t\tА\n\t);\nКонецПроцедуры\n"),
+            (f"Процедура П()\nФ(\n{L}\n);\nКонецПроцедуры\n",
+             f"Процедура П()\n\tФ(\n\t\t{L}\n\t);\nКонецПроцедуры\n"),
             # текст запроса после «=» — на уровне инструкции (пример std437)
-            ("Процедура П()\nЗапрос.Текст =\n\"ВЫБРАТЬ\n|\tА\";\nТ = \"а\" +\n\"б\";\nКонецПроцедуры\n",
-             "Процедура П()\n\tЗапрос.Текст =\n\t\"ВЫБРАТЬ\n\t|\tА\";\n\tТ = \"а\" +\n\t\t\"б\";\nКонецПроцедуры\n"),
-            # параметры объявления — как раньше, +1 к объявлению
-            ("Процедура П(А,\nБ)\nКонецПроцедуры\n", "Процедура П(А,\n\tБ)\nКонецПроцедуры\n"),
+            (f"Процедура П()\nЗапрос.Текст =\n\"ВЫБРАТЬ\n|\tА\";\nТ = \"{L}\" +\n\"б\";\nКонецПроцедуры\n",
+             f"Процедура П()\n\tЗапрос.Текст =\n\t\"ВЫБРАТЬ\n\t|\tА\";\n\tТ = \"{L}\"\n\t\t+ \"б\";\nКонецПроцедуры\n"),
+            # параметры объявления — +1 к объявлению, «)» — на его уровне
+            (f"Процедура П({L},\nБ)\nКонецПроцедуры\n",
+             f"Процедура П(\n\t{L},\n\tБ\n)\nКонецПроцедуры\n"),
             # директива между «=» и текстом запроса не мешает исключению
             ("Процедура П()\nТекст =\n#Если Сервер Тогда\n\"а\";\n#Иначе\n\"б\";\n#КонецЕсли\nКонецПроцедуры\n",
              "Процедура П()\n\tТекст =\n#Если Сервер Тогда\n\t\"а\";\n#Иначе\n\t\"б\";\n#КонецЕсли\nКонецПроцедуры\n"),
@@ -1093,8 +1118,9 @@ class FormatterTests(unittest.TestCase):
     def test_value_of_bare_return_on_next_line(self):
         cases = (
             # выражение — продолжение (+1); КонецЕсли после Возврат — не продолжение
-            ("Функция Ф()\nЕсли А Тогда\nВозврат\nКонецЕсли;\nВозврат\nА +\nБ;\nКонецФункции\n",
-             "Функция Ф()\n\tЕсли А Тогда\n\t\tВозврат\n\tКонецЕсли;\n\tВозврат\n\t\tА +\n\t\tБ;\nКонецФункции\n"),
+            # (раскладка ставит значение в строку Возврат)
+            (f"Функция Ф()\nЕсли А Тогда\nВозврат\nКонецЕсли;\nВозврат\n{L} +\nБ;\nКонецФункции\n",
+             f"Функция Ф()\n\tЕсли А Тогда\n\t\tВозврат\n\tКонецЕсли;\n\tВозврат {L}\n\t\t+ Б;\nКонецФункции\n"),
             # текст запроса — на уровне Возврат, как после «=»
             ("Функция Ф()\nВозврат\n\"ВЫБРАТЬ\n|\t1\";\nКонецФункции\n",
              "Функция Ф()\n\tВозврат\n\t\"ВЫБРАТЬ\n\t|\t1\";\nКонецФункции\n"),
@@ -1116,12 +1142,14 @@ class FormatterTests(unittest.TestCase):
             # в одной строке с Тогда / Иначе
             ("Процедура П()\nЕсли А Тогда Возврат\nИначе Возврат\nКонецЕсли;\nКонецПроцедуры\n",
              "Процедура П()\n\tЕсли А Тогда\n\t\tВозврат\n\tИначе\n\t\tВозврат\n\tКонецЕсли;\nКонецПроцедуры\n"),
-            # свойство .Возврат — не оператор
-            ("Процедура П()\nСтруктура.Возврат\n= 1;\nКонецПроцедуры\n",
-             "Процедура П()\n\tСтруктура.Возврат\n\t\t= 1;\nКонецПроцедуры\n"),
-            # английские слова и CRLF
+            # свойство .Возврат — не оператор; «=» не место разреза, длинная
+            # инструкция остаётся в переносах автора (+1)
+            (f"Процедура П()\nСтруктура.Возврат\n= {L};\nКонецПроцедуры\n",
+             f"Процедура П()\n\tСтруктура.Возврат\n\t\t= {L};\nКонецПроцедуры\n"),
+            # английские слова и CRLF: значение Return — продолжение, раскладка
+            # собирает его в одну строку
             ("Function F()\r\nIf A Then\r\nReturn\r\nEndIf;\r\nReturn\r\nA;\r\nEndFunction\r\n",
-             "Function F()\r\n\tIf A Then\r\n\t\tReturn\r\n\tEndIf;\r\n\tReturn\r\n\t\tA;\r\nEndFunction\r\n"),
+             "Function F()\r\n\tIf A Then\r\n\t\tReturn\r\n\tEndIf;\r\n\tReturn A;\r\nEndFunction\r\n"),
         )
         for source, expected in cases:
             with self.subTest(source=source):
@@ -1134,9 +1162,12 @@ class FormatterTests(unittest.TestCase):
              f"Пока {L}\nИ Б Цикл\nКонецЦикла;\nКонецПроцедуры\n",
              f"Процедура П()\n\tЕсли {L}\n\t\tИ Б\n\t\tИли В Тогда\n\t\tГ = 1;\n\tИначеЕсли {L}\n"
              f"\t\tИ Е Тогда\n\tКонецЕсли;\n\tПока {L}\n\t\tИ Б Цикл\n\tКонецЦикла;\nКонецПроцедуры\n"),
-            # выравнивание по первому условию (глубже +1) сохраняется
+            # раскладка: выравнивание автора по первому условию не сохраняется
             (f"Процедура П()\n\tЕсли {L}\n\t     И Б Тогда\n\tКонецЕсли;\nКонецПроцедуры\n",
-             f"Процедура П()\n\tЕсли {L}\n\t     И Б Тогда\n\tКонецЕсли;\nКонецПроцедуры\n"),
+             f"Процедура П()\n\tЕсли {L}\n\t\tИ Б Тогда\n\tКонецЕсли;\nКонецПроцедуры\n"),
+            # в заголовке с комментарием внутри (без раскладки) — сохраняется
+            (f"Процедура П()\n\tЕсли {L} // к\n\t     И Б Тогда\n\tКонецЕсли;\nКонецПроцедуры\n",
+             f"Процедура П()\n\tЕсли {L} // к\n\t     И Б Тогда\n\tКонецЕсли;\nКонецПроцедуры\n"),
         )
         for source, expected in cases:
             with self.subTest(source=source):
@@ -1148,11 +1179,14 @@ class FormatterTests(unittest.TestCase):
             # инструкция сдвинулась влево — продолжения за ней
             (f"Процедура П()\n\t\t\tЕсли {L}\n\t\t\t\tИ Б Тогда\n\t\t\t\tВ = 1;\n\t\t\tКонецЕсли;\nКонецПроцедуры\n",
              f"Процедура П()\n\tЕсли {L}\n\t\tИ Б Тогда\n\t\tВ = 1;\n\tКонецЕсли;\nКонецПроцедуры\n"),
-            ("Процедура П()\n\t\tС = Новый Структура(\"А, Б\",\n\t\t\tЗначение1,\n\t\t\tЗначение2);\nКонецПроцедуры\n",
-             "Процедура П()\n\tС = Новый Структура(\"А, Б\",\n\t\tЗначение1,\n\t\tЗначение2);\nКонецПроцедуры\n"),
+            # (инструкции с комментарием внутри не раскладываются)
+            ("Процедура П()\n\t\tС = Новый Структура(\"А, Б\", // к\n\t\t\tЗначение1,\n\t\t\tЗначение2);\n"
+             "КонецПроцедуры\n",
+             "Процедура П()\n\tС = Новый Структура(\"А, Б\", // к\n\t\tЗначение1,\n\t\tЗначение2);\n"
+             "КонецПроцедуры\n"),
             # вправо: выравнивание под скобку едет вместе со скобкой
-            ("Процедура П()\nС = Ф(А,\n      Б);\nКонецПроцедуры\n",
-             "Процедура П()\n\tС = Ф(А,\n\t      Б);\nКонецПроцедуры\n"),
+            ("Процедура П()\nС = Ф(А, // к\n      Б);\nКонецПроцедуры\n",
+             "Процедура П()\n\tС = Ф(А, // к\n\t      Б);\nКонецПроцедуры\n"),
         )
         for source, expected in cases:
             with self.subTest(source=source):
@@ -1353,11 +1387,81 @@ class FormatterTests(unittest.TestCase):
                 self.assertEqual(one_line in result, joined)
                 self.assertEqual(format_code(result), result)
 
-    def test_header_join_counts_trailing_comment(self):
+    def test_header_join_ignores_trailing_comment_width(self):
         name = "Ж" * 102
         source = f"Если {name}\nИ Б Тогда // комментарий до предела\nВ();\nКонецЕсли;\n"
-        expected = f"Если {name}\n\tИ Б Тогда // комментарий до предела\n\tВ();\nКонецЕсли;\n"
+        expected = f"Если {name} И Б Тогда // комментарий до предела\n\tВ();\nКонецЕсли;\n"
         self.assertEqual(format_code(source), expected)
+
+    def test_long_statement_is_wrapped(self):
+        source = ("Процедура П()\nРеквизиты = ОбщегоНазначения.ЗначенияРеквизитовОбъекта(ДокументСсылка, "
+                  "\"Организация, Контрагент, Договор, СуммаДокумента\", Истина);\nКонецПроцедуры\n")
+        expected = ("Процедура П()\n\tРеквизиты = ОбщегоНазначения.ЗначенияРеквизитовОбъекта(\n"
+                    "\t\tДокументСсылка, \"Организация, Контрагент, Договор, СуммаДокумента\", Истина);\n"
+                    "КонецПроцедуры\n")
+        self.assertEqual(format_code(source), expected)
+        self.assertEqual(format_code(expected), expected)
+
+    def test_author_multiline_statement_is_unified(self):
+        source = "Процедура П()\nА = Ф(Б,\n      В);\nГ = Д\n+ Е;\nКонецПроцедуры\n"
+        expected = "Процедура П()\n\tА = Ф(Б, В);\n\tГ = Д + Е;\nКонецПроцедуры\n"
+        self.assertEqual(format_code(source), expected)
+
+    def test_export_joins_declaration(self):
+        source = "Процедура П(А,\nБ)\nЭкспорт\nВ = 1;\nКонецПроцедуры\n"
+        self.assertEqual(format_code(source), "Процедура П(А, Б) Экспорт\n\tВ = 1;\nКонецПроцедуры\n")
+
+    def test_wrap_keeps_trailing_comment_and_ignores_its_width(self):
+        comment = "// " + "к" * 150
+        source = f"Процедура П()\nА = Ф(Б,\nВ); {comment}\nКонецПроцедуры\n"
+        self.assertEqual(format_code(source), f"Процедура П()\n\tА = Ф(Б, В); {comment}\nКонецПроцедуры\n")
+
+    def test_statements_that_are_not_wrapped(self):
+        cases = (
+            # комментарий внутри
+            "Процедура П()\n\tА = Ф(Б, // почему\n\t\tВ);\nКонецПроцедуры\n",
+            # многострочный литерал
+            "Процедура П()\n\tА = Ф(\"x\n\t|y\", Б);\nКонецПроцедуры\n",
+            # объявление с инструкцией в строке
+            "Процедура П() А = 1;\nКонецПроцедуры\n",
+        )
+        for source in cases:
+            with self.subTest(source=source):
+                self.assertEqual(format_code(source), source)
+
+    def test_adjacent_literals_keep_layout(self):
+        source = "Процедура П()\n\tЕсли А = \"x\"\n\t\t\"y\" Тогда\n\tКонецЕсли;\nКонецПроцедуры\n"
+        self.assertEqual(format_code(source), source)
+
+    def test_wrap_with_strip_body_comments_is_stable(self):
+        source = "Процедура П()\nА = Ф(Б,\n// удалить\nВ);\nКонецПроцедуры\n"
+        result = format_code(source, strip_body_comments=True)
+        self.assertEqual(result, "Процедура П()\n\tА = Ф(Б, В);\nКонецПроцедуры\n")
+        self.assertEqual(format_code(result, strip_body_comments=True), result)
+
+    def test_wrap_keeps_crlf_and_missing_final_newline(self):
+        long = ", ".join(f"ПараметрНомер{i}" for i in range(9))
+        source = f"Процедура П()\r\nФ({long});\r\nКонецПроцедуры"
+        result = format_code(source)
+        self.assertIn("\tФ(\r\n\t\t", result)
+        self.assertNotIn("\n", result.replace("\r\n", ""))  # все переводы строк — CRLF
+        self.assertTrue(result.endswith("КонецПроцедуры"))
+        tail = f"Ф({long});"
+        result = format_code(tail)
+        self.assertFalse(result.endswith("\n"))
+        self.assertEqual(format_code(result), result)
+
+    def test_layout_does_not_depend_on_author_breaks(self):
+        # Свойство: переводы строк на границах токенов внутри инструкции не
+        # меняют результат (детерминированный перебор позиций).
+        long = ", ".join(f"ПараметрНомер{i}" for i in range(9))
+        statement = f"Результат = Модуль.Функция(А + Б, {long}) Или Флаг;"
+        base = format_code(f"Процедура П()\n{statement}\nКонецПроцедуры\n")
+        positions = [i for i, char in enumerate(statement) if char in " ,("]
+        for position in positions:
+            variant = statement[:position + 1] + "\n" + statement[position + 1:]
+            with self.subTest(position=position):
+                self.assertEqual(format_code(f"Процедура П()\n{variant}\nКонецПроцедуры\n"), base)
 
     def test_header_join_keeps_comment_text_verbatim(self):
         # Хвостовые табы внутри комментария — его текст: склейка их не срезает.
@@ -1524,7 +1628,7 @@ class FormatterTests(unittest.TestCase):
             "Процедура Пример()\n"
             "Если Истина Тогда\n"
             'Ответ = Вопрос("а" +\n'
-            '"б", 1,\n'
+            f'"б", {L},\n'
             "2);\n"
             "Иначе Сообщить(1); КонецЕсли;\n"
             "КонецПроцедуры\n"
@@ -1532,9 +1636,11 @@ class FormatterTests(unittest.TestCase):
         expected = (
             "Процедура Пример()\n"
             "\tЕсли Истина Тогда\n"
-            '\t\tОтвет = Вопрос("а" +\n'
-            '\t\t\t"б", 1,\n'
-            "\t\t\t2);\n"
+            "\t\tОтвет = Вопрос(\n"
+            '\t\t\t"а" + "б",\n'
+            f"\t\t\t{L},\n"
+            "\t\t\t2\n"
+            "\t\t);\n"
             "\tИначе\n"
             "\t\tСообщить(1);\n"
             "\tКонецЕсли;\n"
@@ -1569,7 +1675,7 @@ class FormatterTests(unittest.TestCase):
             "Сообщить(1);\n"
             "Иначе Ответ = Форматировать(\n"
             '"значение",\n'
-            "2);\n"
+            f"{L});\n"
             "Сообщить(Ответ);\n"
             "КонецЕсли;\n"
             "КонецПроцедуры\n"
@@ -1581,7 +1687,8 @@ class FormatterTests(unittest.TestCase):
             "\tИначе\n"
             "\t\tОтвет = Форматировать(\n"
             '\t\t\t"значение",\n'
-            "\t\t\t2);\n"
+            f"\t\t\t{L}\n"
+            "\t\t);\n"
             "\t\tСообщить(Ответ);\n"
             "\tКонецЕсли;\n"
             "КонецПроцедуры\n"
@@ -1598,7 +1705,7 @@ class FormatterTests(unittest.TestCase):
         procedure = (
             "Процедура Выполнить(\n"
             "Значение,\n"
-            "ДопПараметр = Неопределено\n"
+            f"ДопПараметр = {L}\n"
             ")\n"
             "Сообщить(Значение);\n"
             "КонецПроцедуры\n"
@@ -1606,7 +1713,7 @@ class FormatterTests(unittest.TestCase):
         expected_procedure = (
             "Процедура Выполнить(\n"
             "\tЗначение,\n"
-            "\tДопПараметр = Неопределено\n"
+            f"\tДопПараметр = {L}\n"
             ")\n"
             "\tСообщить(Значение);\n"
             "КонецПроцедуры\n"
@@ -1614,7 +1721,7 @@ class FormatterTests(unittest.TestCase):
         function = (
             "Функция Получить(\n"
             "Ключ,\n"
-            "ЗначениеПоУмолчанию = Неопределено\n"
+            f"ЗначениеПоУмолчанию = {L}\n"
             ")\n"
             "Возврат Ключ;\n"
             "КонецФункции\n"
@@ -1622,13 +1729,20 @@ class FormatterTests(unittest.TestCase):
         expected_function = (
             "Функция Получить(\n"
             "\tКлюч,\n"
-            "\tЗначениеПоУмолчанию = Неопределено\n"
+            f"\tЗначениеПоУмолчанию = {L}\n"
             ")\n"
             "\tВозврат Ключ;\n"
             "КонецФункции\n"
         )
         self.assertEqual(format_code(procedure), expected_procedure)
         self.assertEqual(format_code(function), expected_function)
+        self.assertEqual(format_code(expected_procedure), expected_procedure)
+        self.assertEqual(format_code(expected_function), expected_function)
+        # Короткая сигнатура собирается в одну строку.
+        self.assertEqual(
+            format_code("Процедура Выполнить(\nЗначение,\nДоп = 1\n)\nКонецПроцедуры\n"),
+            "Процедура Выполнить(Значение, Доп = 1)\nКонецПроцедуры\n",
+        )
 
     def test_multiline_while_header(self):
         source = (
@@ -1641,13 +1755,16 @@ class FormatterTests(unittest.TestCase):
         )
         expected = (
             "Процедура Пример()\n"
-            f"\tПока ({L}\n"
-            "\t\tИ УсловиеБ) Цикл\n"
+            "\tПока (\n"
+            f"\t\t{L}\n"
+            "\t\t\tИ УсловиеБ\n"
+            "\t) Цикл\n"
             "\t\tОбработать();\n"
             "\tКонецЦикла;\n"
             "КонецПроцедуры\n"
         )
         self.assertEqual(format_code(source), expected)
+        self.assertEqual(format_code(expected), expected)
 
     def test_cli_preview_and_distinct_output(self):
         source = "Процедура Пример()\nСообщить(1);\nКонецПроцедуры\n"

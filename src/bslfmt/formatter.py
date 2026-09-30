@@ -18,6 +18,7 @@ from .lexer import (
     _split_lines,
     _token_rows,
 )
+from .wrap import LINE_WIDTH, TAB_WIDTH, wrap_statement
 
 
 class FormatError(ValueError):
@@ -422,13 +423,13 @@ class _Position:
 def _format_active_code(
     source: str, max_depth: int | None, tokens=None, collapse_blank_lines: bool = False,
     stripped: set[int] | None = None, keep_line_count: bool = False, masked=None,
-    joins: list[tuple[int, int]] | None = None,
+    joins: list[tuple[int, int, list[str]]] | None = None,
 ) -> str:
     """Выравнять только отступы распознанных блоков; при сомнении отказать.
 
     masked — готовый результат _masked_code(source, tokens), если он есть.
-    joins — куда записать заголовки для склейки (номера первой и последней
-    строки, с 0) вместо склейки на месте: в режиме keep_line_count.
+    joins — куда записать раскладку инструкций (первая и последняя строка
+    с 0, новые строки) вместо замены на месте: в режиме keep_line_count.
     """
     cursor = _Position()
     try:
@@ -599,46 +600,13 @@ def _reindent(line: str, depth: int) -> str:
     return "\t" * depth + line[leading:]
 
 
-# Склейка заголовков (решение владельца 2026-09-30, по образцу Black): заголовок
-# Если/ИначеЕсли … Тогда, Пока/Для … Цикл, который вместе с отступом
-# помещается в строку, собирается в одну строку. Таб считается за 4 знака.
-LINE_WIDTH = 120
-TAB_WIDTH = 4
-
-
-def _joined_header(lines: list[str]) -> str | None:
-    """Строки заголовка одной строкой или None, если она длиннее LINE_WIDTH.
-
-    Пустые строки выпадают; на стыке пробел, кроме как у скобок, точки и
-    запятой. Остальные пробелы выравнивает _normalize_spacing — по ней же
-    считается ширина (с отступом и комментарием в конце). Хвост последней
-    строки не срезается: там может быть комментарий с пробелами в конце.
-    """
-    joined = lines[0].rstrip(" \t\f\r\n")
-    last = len(lines) - 1
-    for index, line in enumerate(lines[1:], 1):
-        piece = line.rstrip("\r\n").lstrip(" \t\f")
-        if index != last:
-            piece = piece.rstrip(" \t\f")
-        if not piece.strip(" \t\f"):
-            continue
-        if joined.endswith(("(", "[", ".")) or piece.startswith((")", "]", ",", ".")):
-            joined += piece
-        else:
-            joined += " " + piece
-    width = len(_normalize_spacing(joined).rstrip(" \t\f").expandtabs(TAB_WIDTH))
-    if width > LINE_WIDTH:
-        return None
-    return joined + lines[-1][len(lines[-1].rstrip("\r\n")):]
-
-
 class _LineFormatter:
     """Построчный автомат отступов: состояние блоков, скобок и продолжений."""
 
     def __init__(
         self, source: str, max_depth: int | None, cursor: _Position, tokens=None,
         stripped: set[int] | None = None, keep_line_count: bool = False, masked=None,
-        joins: list[tuple[int, int]] | None = None,
+        joins: list[tuple[int, int, list[str]]] | None = None,
     ) -> None:
         # stripped — куда записать номера удалённых строк-комментариев (None —
         # не удалять); keep_line_count — режим областей правки: строка остаётся
@@ -686,28 +654,22 @@ class _LineFormatter:
         self.last_dedent = False
         self.offset = 0
         self.string_index = 0
-        # Многострочный заголовок: индекс его первой строки в result, номер
-        # строки исходника и можно ли его склеить (нет комментариев,
-        # многострочных литералов, директив и областей правки).
+        # Текущая инструкция для раскладки (спека wrap, части 1 и 3).
         self.joins = joins
-        self.header_start: int | None = None
-        self.header_line = 0
-        self.header_joinable = False
+        self.stmt_start: int | None = None     # индекс первой строки в result
+        self.stmt_line = 0                     # номер строки исходника (с 0)
+        self.stmt_depth = 0                    # глубина первой строки
+        self.stmt_code: list[str] = []         # код строк без комментария
+        self.stmt_comment = ""                 # комментарий последней строки
+        self.stmt_blocked = False              # раскладка запрещена
 
     def run(self, collapse_blank_lines: bool = False) -> str:
         region_lines, conditional_lines = _scan_directives(self.code_lines, self.cursor)
         for number, (line, code) in enumerate(zip(self.lines, self.code_lines)):
             self.cursor.line = number + 1
             inside_string = self._advance(line)
-            if self.pending_header is not None and self.header_joinable and (
-                    inside_string or number in self.opaque_lines
-                    or number in region_lines or number in conditional_lines
-                    or (line.lstrip(" \t\f").startswith("//")
-                        and (self.stripped is None or not self._inside_method()))):
-                # Строка-комментарий, которую удалит strip_body_comments,
-                # склейке не мешает.
-                self.header_joinable = False
             if number in self.opaque_lines:
+                self._statement_break()
                 self.return_pending = False
                 self.pending_comments.clear()
                 self.result.append(line)
@@ -723,8 +685,16 @@ class _LineFormatter:
                     if self.keep_line_count:
                         self.result.append(line)
                     continue
+                # Многострочный литерал: инструкцию не раскладываем.
+                if self.stmt_start is None:
+                    self._start_statement(number)
+                self.stmt_blocked = True
                 self._string_tail_line(line, code)
             elif not line.strip(" \t\f\r\n"):
+                # Пустая строка внутри незаконченной инструкции входит в неё
+                # (раскладка её уберёт), иначе инструкция кончилась.
+                if not self._must_continue():
+                    self._finish_statement()
                 self.result.append(line)
             elif line.lstrip(" \t\f").startswith("//"):
                 # Содержимое комментария не форматируется; отступ берётся у
@@ -732,22 +702,34 @@ class _LineFormatter:
                 # остаётся там: маркеры доработок (//!, //++, //{{) и код,
                 # закомментированный конфигуратором (Ctrl+/).
                 if self.stripped is not None and self._inside_method():
+                    # Удаляемая строка-комментарий раскладке не мешает.
                     self.stripped.add(number + 1)
                     if self.keep_line_count:
                         self.result.append(line)
                     continue
+                self._statement_break()
                 if not line.startswith("//"):
                     self.pending_comments.append(len(self.result))
                 self.result.append(line)
             elif number in region_lines:
+                self._statement_break()
                 self.return_pending = False
                 self.pending_comments.clear()
                 self._region_line(line)
             elif number in conditional_lines:
+                self._statement_break()
                 # Признак Возврат переходит через #Если/#Иначе, как «=».
                 self.pending_comments.clear()
                 self._conditional_line(line, conditional_lines[number])
             else:
+                if not self._continues_statement(line, code):
+                    self._finish_statement()
+                    self._start_statement(number)
+                elif self.stmt_start is None:
+                    # Продолжение инструкции, законченной пустой строкой или
+                    # комментарием: оставляем как есть.
+                    self._start_statement(number)
+                    self.stmt_blocked = True
                 code_index = len(self.result)
                 self.last_dedent = False
                 if self.pending_header is not None:
@@ -756,6 +738,7 @@ class _LineFormatter:
                     self._statement_line(line, code, number)
                 if self.pending_comments:
                     self._place_comments(self.result[code_index])
+                self._note_statement_code(line, code)
             if not inside_string:
                 self.literal_delta = _lead_width(self.result[-1]) - _lead_width(line)
             if (number not in region_lines and number not in conditional_lines
@@ -769,6 +752,9 @@ class _LineFormatter:
                 self.statement_open = False
                 self.declaration_open = False
                 self.in_declaration = False
+            if self.stmt_start is not None and not (
+                    self._must_continue() or self.return_pending or self.statement_open):
+                self._finish_statement()
         self._finish()
         return _normalize_spacing("".join(self.result), collapse_blank_lines)
 
@@ -882,7 +868,10 @@ class _LineFormatter:
             return
         last_word = _IDENTIFIER.findall(tail[-32:])
         block_end = bool(last_word) and last_word[-1].casefold() in _BLOCK_END_WORDS
-        self.statement_open = not tail.endswith(";") and not block_end
+        body = tail.lstrip(" \t\f")
+        # Аннотация «&…» и метка «~Имя:» — границы инструкции (спека wrap).
+        boundary = body.startswith("&") or (body.startswith("~") and tail.endswith(":"))
+        self.statement_open = not tail.endswith(";") and not block_end and not boundary
         top = self.stack[-1] if self.stack else None
         declaration_line = (
             top is not None and len(self.stack) == 1
@@ -982,8 +971,6 @@ class _LineFormatter:
         header_kind, header_depth = self.pending_header
         keywords = _line_keywords(code)
         terminator_end = _header_terminator_end(header_kind, code)
-        if terminator_end is None and self._has_trailing_comment(line, code):
-            self.header_joinable = False
         inline_close = False
         if keywords:
             inline_close = (
@@ -1017,44 +1004,111 @@ class _LineFormatter:
                 self.stack.pop()
             if not self.brackets and not self.operator_continuation:
                 self.continuation_depth = None
-            if self.header_joinable and not inline_close:
-                self._join_header()
 
-    def _has_trailing_comment(self, line: str, code: str) -> bool:
-        """Есть ли в конце строки кода комментарий (после литералов).
+    def _comment_start(self, line: str, code: str) -> int:
+        """Начало «//» комментария в конце строки кода или конец её текста.
 
         В маске литералы и комментарий — пробелы, поэтому хвост строки после
         кода маски состоит только из них.
         """
+        end = len(line.rstrip("\r\n"))
         line_start = self.offset - len(line)
         position = len(code.rstrip(" \t\f\r\n"))
-        length = len(line)
-        while position < length:
+        while position < end:
             char = line[position]
             if char == '"':
                 index = bisect_left(self.strings, (line_start + position,))
                 if index == len(self.strings):
-                    return False
+                    return end
                 position = self.strings[index][1] - line_start
             elif char == "'":
-                position = line.find("'", position + 1) + 1 or length
+                position = line.find("'", position + 1) + 1 or end
             elif line.startswith("//", position):
-                return True
+                return position
             else:
                 position += 1
-        return False
+        return end
 
-    def _join_header(self) -> None:
-        """Склеить законченный многострочный заголовок, если он помещается."""
-        start = self.header_start
-        if self.joins is not None:
-            # Режим областей правки: число строк меняется только после сборки,
-            # там же без удаляемых комментариев проверяется ширина.
-            self.joins.append((self.header_line, self.header_line + len(self.result) - start - 1))
+    # Раскладка инструкций (спека wrap, часть 3)
+
+    def _must_continue(self) -> bool:
+        """Инструкция обязана продолжиться: открыты скобки, оператор, заголовок."""
+        return bool(self.brackets) or self.operator_continuation or (
+            self.pending_header is not None)
+
+    def _continues_statement(self, line: str, code: str) -> bool:
+        """Продолжает ли строка кода текущую инструкцию (до её обработки)."""
+        if self._must_continue():
+            return True
+        if self.return_pending and not _line_keywords(code):
+            return True
+        if self.statement_open and _starts_continuation(line, code):
+            return True
+        return self.declaration_open and (
+            code.strip(" \t\f\r\n").casefold() in {"экспорт", "export"})
+
+    def _start_statement(self, number: int) -> None:
+        self.stmt_start = len(self.result)
+        self.stmt_line = number
+        self.stmt_code = []
+        self.stmt_comment = ""
+        self.stmt_blocked = False
+
+    def _statement_break(self) -> None:
+        """Строка, которая не входит в инструкцию (комментарий, директива…)."""
+        if self.stmt_start is None:
             return
-        joined = _joined_header(self.result[start:])
-        if joined is not None:
-            self.result[start:] = [joined]
+        if self._must_continue():
+            self.stmt_blocked = True
+        else:
+            self._finish_statement()
+
+    def _note_statement_code(self, line: str, code: str) -> None:
+        """Запомнить код обработанной строки инструкции и её комментарий."""
+        if self.stmt_blocked:
+            return
+        if not self.stmt_code:
+            first = self.result[self.stmt_start]
+            self.stmt_depth = len(first) - len(first.lstrip("\t"))
+        if self.stmt_comment:
+            # Комментарий внутри инструкции: раскладка запрещена.
+            self.stmt_blocked = True
+            return
+        comment_start = self._comment_start(line, code)
+        self.stmt_code.append(line[:comment_start])
+        self.stmt_comment = line[comment_start:].rstrip("\r\n")
+
+    def _finish_statement(self) -> None:
+        """Разложить законченную инструкцию (замена — всегда в хвосте result)."""
+        start, self.stmt_start = self.stmt_start, None
+        if start is None or self.stmt_blocked or not self.stmt_code:
+            return
+        lines = self.result[start:]
+        if len(lines) == 1:
+            body = self.stmt_code[0].strip(" \t\f")
+            width = self.stmt_depth * TAB_WIDTH + len(body.expandtabs(TAB_WIDTH))
+            # Предфильтр: нормализация добавляет не больше 2 знаков на
+            # оператор и 1 на запятую; схлопывание только сокращает. Рост
+            # не больше двух длин строки — короткую строку не считаем.
+            if width + 2 * len(body) <= LINE_WIDTH:
+                return
+            if width <= LINE_WIDTH:
+                growth = 2 * sum(body.count(sign) for sign in "+-*/%=<>") + body.count(",")
+                if width + growth <= LINE_WIDTH:
+                    return
+        wrapped = wrap_statement("\n".join(self.stmt_code), self.stmt_depth, _normalize_spacing)
+        if wrapped is None or (len(lines) == 1 and len(wrapped) == 1):
+            return
+        last = lines[-1]
+        newline = last[len(last.rstrip("\r\n")):]
+        inner = newline or lines[0][len(lines[0].rstrip("\r\n")):] or "\n"
+        if self.stmt_comment:
+            wrapped[-1] += " " + self.stmt_comment
+        new_lines = [text + inner for text in wrapped[:-1]] + [wrapped[-1] + newline]
+        if self.joins is not None:
+            self.joins.append((self.stmt_line, self.stmt_line + len(lines) - 1, new_lines))
+            return
+        self.result[start:] = new_lines
 
     def _statement_line(self, line: str, code: str, number: int) -> None:
         after_return = self.return_pending
@@ -1137,10 +1191,6 @@ class _LineFormatter:
         if starts_multiline_declaration:
             self.continuation_depth = depth
         self._apply_keywords(code, keywords, depth, number)
-        if self.pending_header is not None:
-            self.header_start = len(self.result) - 1
-            self.header_line = number
-            self.header_joinable = not self._has_trailing_comment(line, code)
         if starts_branch_call and self.brackets:
             self.continuation_depth = len(self.stack)
         if (not self.brackets and self.pending_header is None
@@ -1230,6 +1280,7 @@ class _LineFormatter:
                 stack.pop()
 
     def _finish(self) -> None:
+        self._finish_statement()
         self.cursor.line = None
         if self.pending_header is not None:
             raise FormatError("незавершённое многострочное условие")
@@ -1640,7 +1691,7 @@ def _format_with_patches(
             )
 
     active_source, _ = _active_source(source)
-    joins: list[tuple[int, int]] = []
+    joins: list[tuple[int, int, list[str]]] = []
     formatted = _format_active_code(
         active_source, max_depth, stripped=stripped, keep_line_count=True, joins=joins
     )
@@ -1650,23 +1701,27 @@ def _format_with_patches(
         raise FormatError("форматирование изменило границы строк")
 
     protected = _protected_patch_lines(source)
-    joined_away: set[int] = set()
-    for first, last in joins:
+    # Раскладка инструкций: число строк меняется только при сборке;
+    # инструкции, задевающие строки областей правки, не трогаются.
+    replaced: dict[int, tuple[int, list[str]]] = {}
+    for first, last, new_lines in joins:
         if protected.intersection(range(first, last + 1)):
             continue
-        # Удаляемые strip_body_comments строки-комментарии в склейку не входят.
-        joined = _joined_header([
-            formatted_lines[number] for number in range(first, last + 1)
-            if not stripped or number + 1 not in stripped
-        ])
-        if joined is not None:
-            formatted_lines[first] = joined
-            joined_away.update(range(first + 1, last + 1))
+        replaced[first] = (last, new_lines)
     if stripped:
         # Строки областей правки дословны: комментарии в них не удаляются.
         stripped.difference_update(number + 1 for number in protected)
-    return "".join(
-        original if number in protected else changed
-        for number, (original, changed) in enumerate(zip(source_lines, formatted_lines))
-        if (not stripped or number + 1 not in stripped) and number not in joined_away
-    )
+    output: list[str] = []
+    number = 0
+    while number < len(source_lines):
+        if number in replaced:
+            # Удаляемые -sbc строки-комментарии в новые строки не входят.
+            last, new_lines = replaced[number]
+            output.extend(new_lines)
+            number = last + 1
+            continue
+        if not stripped or number + 1 not in stripped:
+            output.append(
+                source_lines[number] if number in protected else formatted_lines[number])
+        number += 1
+    return "".join(output)
