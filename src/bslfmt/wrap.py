@@ -182,9 +182,29 @@ class _Layout:
     def __init__(self, units: _Units, normalize) -> None:
         self.units = units
         self.normalize = normalize
+        # Скорость: инструкция нормализуется один раз, части — срезы этой
+        # строки по границам единиц. Нормализация меняет только пробелы между
+        # единицами; если единицы в ней не нашлись по порядку — части
+        # строятся по одной (как срез, но медленнее).
+        self.text = _render(units, 0, len(units.texts), normalize)
+        self.offsets: list[int] | None = []
+        position = 0
+        for text in units.texts:
+            while self.text.startswith(" ", position):
+                position += 1
+            if not self.text.startswith(text, position):
+                self.offsets = None
+                break
+            self.offsets.append(position)
+            position += len(text)
+        if self.offsets is not None and self.text[position:].strip(" "):
+            self.offsets = None
 
     def render(self, start: int, stop: int) -> str:
-        return _render(self.units, start, stop, self.normalize)
+        offsets = self.offsets
+        if offsets is None:
+            return _render(self.units, start, stop, self.normalize)
+        return self.text[offsets[start]:offsets[stop - 1] + len(self.units.texts[stop - 1])]
 
     def fits(self, depth: int, text: str) -> bool:
         return _width(depth, text) <= LINE_WIDTH

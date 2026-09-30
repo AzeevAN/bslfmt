@@ -166,6 +166,15 @@ class WrapTests(unittest.TestCase):
         long_code = "А = " + "Б + " * 30 + "В; // это комментарий"
         self.assertIsNone(wrap(long_code))
 
+    def test_parts_are_slices_of_one_normalization(self):
+        # Части — срезы одной нормализованной строки; нормализация, которая
+        # меняет не только пробелы, разбирается по частям с тем же итогом.
+        long = ", ".join(f"ПараметрНомер{i}" for i in range(9))
+        code = f"Результат = Модуль.Функция(А+Б, {long}) Или Флаг;"
+        expected = [line.lower() for line in wrap(code)]
+        self.assertEqual(wrap_statement(code, 1, lambda text: _normalize_spacing(text).lower()),
+                         expected)
+
 
 if __name__ == "__main__":
     unittest.main()
