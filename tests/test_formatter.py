@@ -1475,6 +1475,8 @@ class FormatterTests(unittest.TestCase):
         self.assertEqual(format_code(result), result)
         stripped = format_code(source.replace("А = Б\n", "А = Б\n// удалить\n"), strip_body_comments=True)
         self.assertIn("\tА = Б + В;\n", stripped)
+        self.assertNotIn("// удалить", stripped)
+        self.assertIn(f"#Вставка\nФ({long});\n#КонецВставки\n", stripped)
         self.assertEqual(format_code(stripped, strip_body_comments=True), stripped)
 
     def test_author_spaces_inside_line_do_not_depend_on_breaks(self):
