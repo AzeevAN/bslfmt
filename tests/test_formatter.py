@@ -1481,7 +1481,7 @@ class FormatterTests(unittest.TestCase):
 
     def test_author_spaces_inside_line_do_not_depend_on_breaks(self):
         # Перевод строки вместо пробела автора (и после «,»/«(») даёт то же,
-        # что инструкция в одну строку (Ruling 4).
+        # что инструкция в одну строку.
         statements = (
             "Ф(Не(А), Б);",
             "Ф(Не (А), Б);",
@@ -1498,7 +1498,7 @@ class FormatterTests(unittest.TestCase):
             for position in positions:
                 if statement[:position].endswith("Новый"):
                     # Строка «Массив(…)» после «… = Новый» — новая инструкция
-                    # (спека, часть 1: граница, а не пробелы).
+                    # (это граница инструкции, а не пробелы).
                     continue
                 if statement[position] == " ":
                     variant = statement[:position] + "\n" + statement[position + 1:]
@@ -1508,6 +1508,35 @@ class FormatterTests(unittest.TestCase):
                     result = format_code(f"Процедура П()\n{variant}{closing}\nКонецПроцедуры\n")
                     self.assertEqual(result, base)
                     self.assertEqual(format_code(result), result)
+
+    def test_property_named_like_keyword_is_not_block_end(self):
+        # Слово после «.» — имя свойства, а не начало/конец блока.
+        for word in ("Цикл", "Иначе", "Тогда", "Попытка", "Исключение", "КонецЕсли", "Do", "Else", "Try"):
+            operands = " + ".join(f"Сл{i}.{word}" for i in range(16))
+            source = f"Процедура П()\n\tИтог = {operands};\nКонецПроцедуры\n"
+            with self.subTest(word=word):
+                result = format_code(source)
+                self.assertEqual(format_code(result), result)
+                self.assertGreater(result.count("\n"), 3)
+                for line in result.splitlines()[2:-2]:
+                    self.assertEqual(line[:2], "\t\t")
+                    self.assertNotEqual(line[:3], "\t\t\t")
+
+    def test_property_named_like_keyword_does_not_stop_join(self):
+        for word in ("Иначе", "Цикл", "Do"):
+            source = f"Процедура П()\n\tА = Б.{word} + 1\n\t+ В;\nКонецПроцедуры\n"
+            with self.subTest(word=word):
+                result = format_code(source)
+                self.assertIn(f"\tА = Б.{word} + 1 + В;\n", result)
+                self.assertEqual(format_code(result), result)
+
+    def test_crlf_without_final_newline_keeps_crlf(self):
+        params = ", ".join(f"ПараметрНомер{i}" for i in range(9))
+        source = f"А = 1;\r\nФункция1({params}, ДлинныйПараметрДесять, ДлинныйПараметрОдиннадцать);"
+        result = format_code(source)
+        self.assertGreater(result.count("\r\n"), 1)
+        self.assertNotIn("\n", result.replace("\r\n", ""))
+        self.assertEqual(format_code(result), result)
 
     def test_layout_does_not_depend_on_author_breaks(self):
         # Свойство: переводы строк на границах токенов внутри инструкции не

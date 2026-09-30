@@ -445,6 +445,18 @@ def _format_active_code(
 _TRAILING_OPERATOR = re.compile(r"(?:[+*/%=<>,.-]|\b(?:И|ИЛИ|НЕ)\b)\s*$", re.IGNORECASE)
 
 
+def _ends_with_block_word(code_tail: str) -> bool:
+    """Кончается ли код словом начала/конца блока (не именем свойства после «.»)."""
+    last_word = _IDENTIFIER.findall(code_tail[-32:])
+    if not last_word:
+        return False
+    word = last_word[-1]
+    if word.casefold() not in _BLOCK_END_WORDS or not code_tail.endswith(word):
+        return False
+    before = code_tail[-len(word) - 1:-len(word)]
+    return before != "."
+
+
 def _ends_with_bare_return(code_tail: str) -> bool:
     """Кончается ли код одиночным Возврат/Return: значение — на следующей строке.
 
@@ -617,6 +629,8 @@ class _LineFormatter:
             _masked_code(source, tokens) if masked is None else masked
         )
         self.lines = _split_lines(source)
+        first_newline = _NEWLINE.search(source)
+        self.default_newline = first_newline.group() if first_newline else "\n"
         self.code_lines = _split_lines(masked)
         if len(self.lines) != len(self.code_lines):
             raise FormatError("не удалось сопоставить строки")
@@ -654,7 +668,7 @@ class _LineFormatter:
         self.last_dedent = False
         self.offset = 0
         self.string_index = 0
-        # Текущая инструкция для раскладки (спека wrap, части 1 и 3).
+        # Текущая инструкция для раскладки (README, «Стиль форматирования»).
         self.joins = joins
         self.stmt_start: int | None = None     # индекс первой строки в result
         self.stmt_line = 0                     # номер строки исходника (с 0)
@@ -866,10 +880,9 @@ class _LineFormatter:
                 # следующая строка.
                 self.statement_open = True
             return
-        last_word = _IDENTIFIER.findall(tail[-32:])
-        block_end = bool(last_word) and last_word[-1].casefold() in _BLOCK_END_WORDS
+        block_end = _ends_with_block_word(tail)
         body = tail.lstrip(" \t\f")
-        # Аннотация «&…» и метка «~Имя:» — границы инструкции (спека wrap).
+        # Аннотация «&…» и метка «~Имя:» — границы инструкции.
         boundary = body.startswith("&") or (body.startswith("~") and tail.endswith(":"))
         self.statement_open = not tail.endswith(";") and not block_end and not boundary
         top = self.stack[-1] if self.stack else None
@@ -1029,7 +1042,7 @@ class _LineFormatter:
                 position += 1
         return end
 
-    # Раскладка инструкций (спека wrap, часть 3)
+    # Раскладка инструкций (README, «Стиль форматирования»)
 
     def _must_continue(self) -> bool:
         """Инструкция обязана продолжиться: открыты скобки, оператор, заголовок."""
@@ -1090,6 +1103,8 @@ class _LineFormatter:
             # Предфильтр: нормализация добавляет не больше 2 знаков на
             # оператор и 1 на запятую; схлопывание только сокращает. Рост
             # не больше двух длин строки — короткую строку не считаем.
+            # «;» внутри строки в оценке не учтён: безопасно, _break_lines
+            # раньше делит инструкции по «;».
             if width + 2 * len(body) <= LINE_WIDTH:
                 return
             if width <= LINE_WIDTH:
@@ -1101,7 +1116,7 @@ class _LineFormatter:
             return
         last = lines[-1]
         newline = last[len(last.rstrip("\r\n")):]
-        inner = newline or lines[0][len(lines[0].rstrip("\r\n")):] or "\n"
+        inner = newline or lines[0][len(lines[0].rstrip("\r\n")):] or self.default_newline
         if self.stmt_comment:
             wrapped[-1] += " " + self.stmt_comment
         new_lines = [text + inner for text in wrapped[:-1]] + [wrapped[-1] + newline]
@@ -1125,7 +1140,7 @@ class _LineFormatter:
         export_tail = (self.declaration_open and not was_continuation
                        and code.strip(" \t\f\r\n").casefold() in {"экспорт", "export"})
         if leading or export_tail:
-            # Продолжение инструкции предыдущей строки (спека wrap, часть 1).
+            # Продолжение инструкции предыдущей строки.
             self.continuation_depth = self.statement_depth_for_continuation
             # Строка не выровнена по операнду первой строки: сдвиг её отступа
             # не переносится.
