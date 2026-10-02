@@ -162,11 +162,20 @@ class WrapTests(unittest.TestCase):
         self.assertIsNone(wrap("А = " + "Б + " * 3000 + "В;"))
 
     def test_large_statement_is_fast(self):
-        big = "А = " + " + ".join(
-            f"Ф{i}(Х, Y, " + "Ф(" * 20 + "Z" + ")" * 20 + ")" for i in range(95)) + ";"
-        started = time.perf_counter()
-        self.assertIsNotNone(wrap(big))
-        self.assertLess(time.perf_counter() - started, 0.5)
+        # Рост времени, а не абсолютный порог: 24 → 95 слагаемых (×4) — время
+        # меньше ×8.
+        def best(count):
+            big = "А = " + " + ".join(
+                f"Ф{i}(Х, Y, " + "Ф(" * 20 + "Z" + ")" * 20 + ")" for i in range(count)) + ";"
+            result = float("inf")
+            for _ in range(3):
+                started = time.perf_counter()
+                self.assertIsNotNone(wrap(big))
+                result = min(result, time.perf_counter() - started)
+            return result
+
+        small, large = best(24), best(95)
+        self.assertLess(large, max(small, 0.005) * 8)
 
     def test_unary_minus_in_parameters_no_space(self):
         # Параметр с унарным минусом не должен иметь пробел после минуса.

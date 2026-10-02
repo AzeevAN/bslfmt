@@ -499,5 +499,93 @@ class CliTests(unittest.TestCase):
         self.assertEqual(calls, ["fsync", "replace"])
         self.assertEqual(path.read_text(encoding="utf-8"), FORMATTED)
 
+
+class CliStreamTests(unittest.TestCase):
+    def test_cli_preview_and_distinct_output(self):
+        source = "Процедура Пример()\nСообщить(1);\nКонецПроцедуры\n"
+        with tempfile.TemporaryDirectory() as temp:
+            original = Path(temp) / "module.bsl"
+            output = Path(temp) / "formatted.bsl"
+            original.write_text(source, encoding="utf-8")
+            stdout = StringIO()
+            with redirect_stdout(stdout):
+                self.assertEqual(main([str(original), "--diff"]), 0)
+            self.assertIn("+\tСообщить(1);", stdout.getvalue())
+            self.assertEqual(original.read_text(encoding="utf-8"), source)
+            with redirect_stderr(StringIO()):
+                self.assertEqual(main([str(original), "--output", str(original)]), 2)
+            self.assertEqual(original.read_text(encoding="utf-8"), source)
+            self.assertEqual(main([str(original), "--output", str(output)]), 0)
+            self.assertEqual(output.read_text(encoding="utf-8"), format_code(source))
+            with redirect_stderr(StringIO()):
+                self.assertEqual(main([str(original), "--output", str(output)]), 2)
+
+    def test_cli_reports_format_error_without_output(self):
+        with tempfile.TemporaryDirectory() as temp:
+            original = Path(temp) / "module.bsl"
+            output = Path(temp) / "formatted.bsl"
+            original.write_text("КонецЕсли;\n", encoding="utf-8")
+            stderr = StringIO()
+            with redirect_stderr(stderr), redirect_stdout(StringIO()):
+                self.assertEqual(main([str(original), "--output", str(output)]), 2)
+            self.assertTrue(stderr.getvalue().startswith("bslfmt: "))
+            self.assertFalse(output.exists())
+
+    def test_cli_reads_standard_input(self):
+        stdout = StringIO()
+        with mock.patch("sys.stdin", StringIO("Процедура П()\nА=1;\nКонецПроцедуры\n")), \
+                redirect_stdout(stdout):
+            self.assertEqual(main(["-"]), 0)
+        self.assertEqual(stdout.getvalue(), "Процедура П()\n\tА = 1;\nКонецПроцедуры\n")
+
+    def test_cli_removes_partial_output_when_write_fails(self):
+        with tempfile.TemporaryDirectory() as temp:
+            original = Path(temp) / "module.bsl"
+            output = Path(temp) / "formatted.bsl"
+            original.write_text("Сообщить(1);\n", encoding="utf-8")
+            # Одиночный суррогат не кодируется в UTF-8: запись падает.
+            with mock.patch("bslfmt.__main__.format_code", return_value="\ud800"), \
+                    redirect_stderr(StringIO()):
+                self.assertEqual(main([str(original), "--output", str(output)]), 2)
+            self.assertFalse(output.exists())
+
+    def test_cli_standard_streams_are_utf8_bytes_on_any_platform(self):
+        # Имитация Windows: stdin в кодировке локали с universal newlines,
+        # stdout переводит \n в \r\n. CLI должен работать с байтами UTF-8.
+        source = "Процедура П()\r\nА=1;\r\nКонецПроцедуры\r\n"
+        expected = "Процедура П()\r\n\tА = 1;\r\nКонецПроцедуры\r\n".encode("utf-8")
+        for arguments in (["-"], ["-", "--diff"]):
+            with self.subTest(arguments=arguments):
+                stdin = io.TextIOWrapper(io.BytesIO(source.encode("utf-8")), encoding="cp1251")
+                raw = io.BytesIO()
+                stdout = io.TextIOWrapper(raw, encoding="cp1251", newline="\r\n")
+                with mock.patch("sys.stdin", stdin), mock.patch("sys.stdout", stdout):
+                    self.assertEqual(main(arguments), 0)
+                    stdout.flush()
+                if arguments == ["-"]:
+                    self.assertEqual(raw.getvalue(), expected)
+                else:
+                    self.assertIn("+\tА = 1;\r\n".encode("utf-8"), raw.getvalue())
+                    self.assertNotIn(b"\r\r\n", raw.getvalue())
+
+    def test_cli_internal_error_has_own_exit_code(self):
+        stderr = StringIO()
+        with mock.patch("bslfmt.__main__.format_code", side_effect=RuntimeError("сбой")), \
+                mock.patch("sys.stdin", StringIO("А = 1;\n")), \
+                redirect_stderr(stderr), redirect_stdout(StringIO()):
+            self.assertEqual(main(["-"]), 3)
+        self.assertIn("внутренняя ошибка", stderr.getvalue())
+        self.assertNotIn("Traceback", stderr.getvalue())
+
+    def test_cli_missing_standard_streams_are_input_output_errors(self):
+        for stream in ("sys.stdin", "sys.stdout"):
+            stderr = StringIO()
+            with self.subTest(stream=stream), mock.patch(stream, None), \
+                    mock.patch("sys.stdin" if stream == "sys.stdout" else "sys.stdout",
+                               StringIO("А = 1;\n")), \
+                    redirect_stderr(stderr):
+                self.assertEqual(main(["-"]), 2)
+            self.assertIn("недоступен", stderr.getvalue())
+
 if __name__ == "__main__":
     unittest.main()
