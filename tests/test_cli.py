@@ -1,4 +1,5 @@
 import difflib
+import io
 import os
 import re
 import tempfile
@@ -364,6 +365,139 @@ class CliTests(unittest.TestCase):
         self.assertTrue(err.startswith("bslfmt: стандартный ввод: "))
         self.assertEqual(format_code(UNFORMATTED), FORMATTED)
 
+
+    def test_diff_marks_missing_newline_at_end(self):
+        # Строки без перевода в конце файла: маркер «\\ No newline…», как у
+        # diff и git, а не склейка с соседней строкой и заголовком.
+        a = self.write("а.bsl", "А=1;")
+        b = self.write("б.bsl", "Б=2;")
+        code, out, _ = run(["--diff", str(a), str(b)])
+        self.assertEqual(code, 0)
+        marker = "\\ No newline at end of file\n"
+        self.assertIn(f"-А=1;\n{marker}+А = 1;\n{marker}--- {b}\n", out)
+        self.assertTrue(out.endswith(f"+Б = 2;\n{marker}"))
+        same_end = self.write("в.bsl", "Процедура П()\nА=1;\nКонецПроцедуры")
+        out = run(["--diff", str(same_end)])[1]
+        self.assertIn(f" КонецПроцедуры\n{marker}", out)
+
+    def test_prefixes_of_short_flags_are_rejected(self):
+        # «-s» и «-sb» — не сокращения -sbc: опечатка не удаляет комментарии.
+        source = "Процедура П()\n// к\nА=1;\nКонецПроцедуры\n"
+        path = self.write("м.bsl", source)
+        for flag in ("-s", "-sb", "-sbcx", "-ii", "-x"):
+            with self.subTest(flag=flag):
+                code, _, err = run(["-i", flag, str(path)])
+                self.assertEqual(code, 2)
+                self.assertIn("неизвестные аргументы", err)
+        self.assertEqual(path.read_text(encoding="utf-8"), source)
+        # Значение --output с «-» в начале (через «=») — имя файла, а не флаг.
+        cwd = os.getcwd()
+        os.chdir(self.dir)
+        self.addCleanup(os.chdir, cwd)
+        code, _, err = run([str(path), "--output=-s.bsl"])
+        self.assertEqual(code, 0, err)
+        self.assertTrue((self.dir / "-s.bsl").exists())
+
+    def test_broken_pipe_is_silent(self):
+        class ClosedPipe:
+            def write(self, text):
+                raise BrokenPipeError(32, "Broken pipe")
+
+            def flush(self):
+                pass
+
+        path = self.write("м.bsl", UNFORMATTED)
+        for arguments, expected in (([str(path)], 0), (["--check", str(path)], 1),
+                                    (["--diff", str(path), str(path)], 0)):
+            stderr = StringIO()
+            with self.subTest(arguments=arguments), \
+                    mock.patch("sys.stdout", ClosedPipe()), redirect_stderr(stderr):
+                self.assertEqual(main(arguments), expected)
+                self.assertEqual(stderr.getvalue(), "")
+
+    def test_os_errors_name_paths_once_and_in_russian(self):
+        cwd = os.getcwd()
+        os.chdir(self.dir)
+        self.addCleanup(os.chdir, cwd)
+        code, _, err = run(["./нет.bsl"])
+        self.assertEqual(code, 2)
+        self.assertEqual(err, "bslfmt: ./нет.bsl: файл не найден\n")
+        path = self.write("м.bsl", UNFORMATTED)
+        temp_error = PermissionError(13, "Permission denied", str(self.dir / ".м.bsl.x.tmp"))
+        with mock.patch("bslfmt.__main__.tempfile.mkstemp", side_effect=temp_error):
+            code, _, err = run(["-i", str(path)])
+        self.assertEqual(code, 2)
+        self.assertNotIn(".tmp", err)
+        self.assertIn("нет доступа", err)
+        full = OSError(28, "No space left on device")
+        with mock.patch("bslfmt.__main__.os.replace", side_effect=full):
+            code, _, err = run(["-i", str(path)])
+        self.assertEqual(code, 2)
+        self.assertIn("нет места на диске", err)
+        self.assertNotIn("No space", err)
+        for error, fragment in ((OSError(5, "Input/output error"), "ошибка ввода-вывода"),
+                                (OSError(1234, "Strange"), "ошибка ОС 1234")):
+            with self.subTest(fragment=fragment), \
+                    mock.patch("bslfmt.__main__.os.replace", side_effect=error):
+                err = run(["-i", str(path)])[2]
+                self.assertIn(fragment, err)
+                self.assertNotIn("Errno", err)
+
+    def test_output_dash_is_rejected(self):
+        path = self.write("м.bsl", UNFORMATTED)
+        cwd = os.getcwd()
+        os.chdir(self.dir)
+        self.addCleanup(os.chdir, cwd)
+        code, out, err = run([str(path), "--output", "-"])
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("--output", err)
+        self.assertFalse((self.dir / "-").exists())
+
+    def test_undecodable_file_name_is_reported(self):
+        stderr = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+        with mock.patch("sys.stderr", stderr), redirect_stdout(StringIO()):
+            code = main([str(self.dir / "x\udcff.bsl")])
+        stderr.flush()
+        self.assertEqual(code, 2)
+        self.assertIn(b"x\\udcff.bsl", stderr.buffer.getvalue())
+
+    @unittest.skipUnless(os.path.exists(os.devnull) and os.name == "posix", "нужно устройство")
+    def test_device_is_not_read(self):
+        code, _, err = run([os.devnull])
+        self.assertEqual(code, 2)
+        self.assertIn("не обычный файл", err)
+
+    def test_input_size_is_limited_before_reading_everything(self):
+        path = self.write("м.bsl", UNFORMATTED * 10)
+        with mock.patch("bslfmt.__main__._MAX_BYTES", 16):
+            code, _, err = run([str(path)])
+            self.assertEqual(code, 2)
+            self.assertIn("больше 16 байт", err)
+            with mock.patch("sys.stdin", io.TextIOWrapper(io.BytesIO(b"x" * 100))):
+                code, _, err = run(["-"])
+            self.assertEqual(code, 2)
+            self.assertIn("больше 16 байт", err)
+
+    def test_output_cleanup_failure_keeps_original_error(self):
+        path = self.write("м.bsl", UNFORMATTED)
+        target = self.dir / "выход.bsl"
+        with mock.patch("bslfmt.__main__._write_new", side_effect=OSError(28, "No space left on device")), \
+                mock.patch("pathlib.Path.unlink", side_effect=PermissionError("нет доступа")):
+            code, _, err = run([str(path), "--output", str(target)])
+        self.assertEqual(code, 2)
+        self.assertIn("нет места на диске", err)
+
+    def test_in_place_syncs_before_replace(self):
+        path = self.write("м.bsl", UNFORMATTED)
+        calls = []
+        real_fsync, real_replace = os.fsync, os.replace
+        with mock.patch("bslfmt.__main__.os.fsync",
+                        side_effect=lambda fd: (calls.append("fsync"), real_fsync(fd))), \
+                mock.patch("bslfmt.__main__.os.replace",
+                           side_effect=lambda a, b: (calls.append("replace"), real_replace(a, b))):
+            self.assertEqual(run(["-i", str(path)])[0], 0)
+        self.assertEqual(calls, ["fsync", "replace"])
+        self.assertEqual(path.read_text(encoding="utf-8"), FORMATTED)
 
 if __name__ == "__main__":
     unittest.main()

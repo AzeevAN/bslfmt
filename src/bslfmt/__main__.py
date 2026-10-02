@@ -15,7 +15,7 @@ import tempfile
 from importlib import metadata
 from pathlib import Path
 
-from .formatter import FormatError, format_code
+from .formatter import DEFAULT_MAX_CHARS, FormatError, format_code
 from .lexer import LexerError, _split_lines
 
 HELP = """\
@@ -96,7 +96,8 @@ class _Parser(argparse.ArgumentParser):
 
 def _write(stream, text: str) -> None:
     # Байты UTF-8 без перевода \n в \r\n: так вывод читают агенты и хуки, а
-    # консоль Windows принимает UTF-8 через buffer (PEP 528).
+    # консоль Windows принимает UTF-8 через buffer (PEP 528). Имя файла с
+    # байтами не из UTF-8 (суррогаты из argv) выводится как «\udcff».
     if stream is None:
         raise OSError("стандартный вывод недоступен")
     buffer = getattr(stream, "buffer", None)
@@ -104,7 +105,7 @@ def _write(stream, text: str) -> None:
         stream.write(text)
         return
     stream.flush()
-    buffer.write(text.encode("utf-8"))
+    buffer.write(text.encode("utf-8", "backslashreplace"))
     buffer.flush()
 
 
@@ -115,6 +116,19 @@ def _report_error(text: str) -> None:
         pass
 
 
+# Больше байт исходник не бывает: лимит format_code — в символах, а символ
+# UTF-8 — не больше 4 байт. Чтение прекращается сразу за пределом, поэтому
+# устройство вроде /dev/zero не съедает память.
+_MAX_BYTES = DEFAULT_MAX_CHARS * 4
+
+
+def _read_limited(stream) -> bytes:
+    data = stream.read(_MAX_BYTES + 1)
+    if len(data) > _MAX_BYTES:
+        raise OSError(f"файл больше {_MAX_BYTES} байт")
+    return data
+
+
 def _read_stdin() -> str:
     # Байты UTF-8, а не текстовый поток: иначе на Windows действуют кодировка
     # локали и замена CRLF на LF.
@@ -123,18 +137,22 @@ def _read_stdin() -> str:
     buffer = getattr(sys.stdin, "buffer", None)
     if buffer is None:
         return sys.stdin.read()
-    return buffer.read().decode("utf-8")
+    return _read_limited(buffer).decode("utf-8")
 
 
 def _read(name: str) -> str:
     if name == "-":
         return _read_stdin()
     path = Path(name)
-    if path.is_dir():
+    mode = path.stat().st_mode
+    if stat.S_ISDIR(mode):
         # На Windows open() каталога даёт PermissionError, поэтому проверяем сами.
         raise IsADirectoryError(errno.EISDIR, "это каталог", name)
-    with path.open("r", encoding="utf-8", newline="") as stream:
-        return stream.read()
+    if not (stat.S_ISREG(mode) or stat.S_ISFIFO(mode)):
+        # Канал допустим: bslfmt <(git show HEAD:Модуль.bsl).
+        raise OSError("не обычный файл (устройство или сокет)")
+    with path.open("rb") as stream:
+        return _read_limited(stream).decode("utf-8")
 
 
 def _display_name(name: str) -> str:
@@ -148,6 +166,19 @@ _OS_ERRORS = (
     (NotADirectoryError, "в пути файл вместо каталога"),
     (PermissionError, "нет доступа"),
 )
+_ERRNO_TEXTS = {
+    errno.ENOSPC: "нет места на диске",
+    errno.EROFS: "файловая система только для чтения",
+    errno.ELOOP: "слишком много символических ссылок",
+    errno.ENAMETOOLONG: "слишком длинное имя файла",
+    errno.EBUSY: "файл занят",
+    errno.EIO: "ошибка ввода-вывода",
+    errno.EINVAL: "недопустимый аргумент",
+}
+
+
+def _same_path(a, b: str) -> bool:
+    return os.path.abspath(os.fspath(a)) == os.path.abspath(b)
 
 
 def _describe(error: BaseException, name: str) -> str:
@@ -155,16 +186,17 @@ def _describe(error: BaseException, name: str) -> str:
 
     strerror есть только у ошибок, созданных ОС: свои сообщения выводятся
     без замены. Путь из ошибки добавляется, если это не сам входной файл
-    (например, файл --output или временный файл рядом).
+    (например, файл --output).
     """
     if isinstance(error, UnicodeDecodeError):
         return f"файл не в кодировке UTF-8 (байт {error.start})"
     if isinstance(error, OSError) and error.strerror:
-        for kind, text in _OS_ERRORS:
-            if isinstance(error, kind):
-                if error.filename is not None and str(error.filename) != name:
-                    return f"{text}: {error.filename}"
-                return text
+        text = next((text for kind, text in _OS_ERRORS if isinstance(error, kind)), None)
+        if text is None:
+            text = _ERRNO_TEXTS.get(error.errno, f"ошибка ОС {error.errno}")
+        if error.filename is not None and not _same_path(error.filename, name):
+            return f"{text}: {error.filename}"
+        return text
     return str(error)
 
 
@@ -230,10 +262,21 @@ def _changed_lines(source: str, formatted: str) -> int:
     )
 
 
+_NO_NEWLINE = "\n\\ No newline at end of file\n"
+
+
+def _diff_lines(text: str) -> list[str]:
+    """Строки для unified_diff: у последней без перевода — маркер, как в diff."""
+    lines = _split_lines(text)
+    if lines and not lines[-1].endswith(("\n", "\r")):
+        lines[-1] += _NO_NEWLINE
+    return lines
+
+
 def _diff(name: str, source: str, formatted: str) -> str:
     return "".join(difflib.unified_diff(
-        _split_lines(source),
-        _split_lines(formatted),
+        _diff_lines(source),
+        _diff_lines(formatted),
         fromfile=name,
         tofile=f"{name} (formatted)",
     ))
@@ -250,13 +293,23 @@ def _replace_file(path: Path, text: str) -> None:
     target = path.resolve()
     if not os.access(target, os.W_OK):
         raise OSError("файл только для чтения")
-    descriptor, temp_name = tempfile.mkstemp(
-        dir=target.parent, prefix=f".{target.name}.", suffix=".tmp"
-    )
+    try:
+        descriptor, temp_name = tempfile.mkstemp(
+            dir=target.parent, prefix=f".{target.name}.", suffix=".tmp"
+        )
+    except OSError as error:
+        # Имя временного файла пользователю ничего не скажет: ошибка — про
+        # каталог исходного файла.
+        error.filename = os.fspath(path)
+        raise
     temp = Path(temp_name)
     try:
         with os.fdopen(descriptor, "wb") as stream:
             stream.write(text.encode("utf-8"))
+            # Без сброса на диск сбой питания после замены мог оставить
+            # пустой файл.
+            stream.flush()
+            os.fsync(stream.fileno())
         shutil.copymode(target, temp)
         os.replace(temp, target)
     except BaseException:
@@ -267,6 +320,9 @@ def _replace_file(path: Path, text: str) -> None:
         with contextlib.suppress(OSError):
             temp.unlink(missing_ok=True)
         raise
+
+
+_SHORT_FLAGS = frozenset({"-h", "-i", "-sbc"})
 
 
 def _parse(argv: list[str] | None) -> argparse.Namespace:
@@ -294,6 +350,13 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
     ]
     if "-h" in flags or "--help" in flags:
         return argparse.Namespace(help=True, version=False)
+    # argparse принимает префикс однодефисного флага («-s» как -sbc) даже без
+    # allow_abbrev: опечатка удалила бы комментарии. Короткие флаги — только
+    # целиком.
+    for argument in flags:
+        if (argument.startswith("-") and not argument.startswith("--")
+                and argument != "-" and argument not in _SHORT_FLAGS):
+            raise _UsageError(f"неизвестные аргументы: {argument}")
     # Файлы и флаги в любом порядке: «bslfmt а.bsl -i б.bsl».
     args = parser.parse_intermixed_args(arguments)
     args.files += files_after_dash
@@ -307,6 +370,9 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
         raise _UsageError("-i нельзя вместе с --check, --diff и --output")
     if args.output and (args.check or args.diff):
         raise _UsageError("--output нельзя вместе с --check и --diff")
+    if args.output is not None and str(args.output) == "-":
+        raise _UsageError("--output: «-» не поддерживается; без --output результат "
+                          "выводится на экран")
     if len(args.files) > 1 and not (args.in_place or args.check or args.diff):
         raise _UsageError("несколько файлов — только с -i, --check или --diff")
     if "-" in args.files and (len(args.files) > 1 or args.in_place):
@@ -314,22 +380,43 @@ def _parse(argv: list[str] | None) -> argparse.Namespace:
     return args
 
 
-def _summary(text: str) -> None:
-    """Сводка -i: файл уже записан, поэтому сбой вывода не делает его неудачным.
+def _silence_stdout() -> None:
+    """Перенаправить stdout в devnull после сбоя вывода.
 
-    После сбоя stdout перенаправляется в devnull: иначе Python при выходе
-    снова попытается сбросить буфер и напечатает BrokenPipeError.
+    Иначе Python при выходе снова попытается сбросить буфер и напечатает
+    BrokenPipeError.
     """
+    with contextlib.suppress(OSError, ValueError, AttributeError):
+        target = sys.stdout.fileno()
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        try:
+            os.dup2(devnull, target)
+        finally:
+            os.close(devnull)
+
+
+def _summary(text: str) -> None:
+    """Сводка -i: файл уже записан, поэтому сбой вывода не делает его неудачным."""
     try:
         _write(sys.stdout, text)
     except OSError:
-        with contextlib.suppress(OSError, ValueError, AttributeError):
-            target = sys.stdout.fileno()
-            devnull = os.open(os.devnull, os.O_WRONLY)
-            try:
-                os.dup2(devnull, target)
-            finally:
-                os.close(devnull)
+        _silence_stdout()
+
+
+def _write_new(path: Path, text: str) -> None:
+    """Записать текст в новый файл; при сбое удалить свой неполный файл.
+
+    Режим "x" создаёт только новый файл, поэтому удаляется именно свой файл:
+    он не блокирует повторный запуск. Уборка не подменяет исходную ошибку.
+    """
+    stream = path.open("x", encoding="utf-8", newline="")
+    try:
+        with stream:
+            stream.write(text)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            path.unlink(missing_ok=True)
+        raise
 
 
 def _process(name: str, args: argparse.Namespace) -> int:
@@ -355,15 +442,7 @@ def _process(name: str, args: argparse.Namespace) -> int:
     if args.output:
         if name != "-" and args.output.resolve() == Path(name).resolve():
             raise FormatError("выходной файл должен отличаться от исходного")
-        # Режим "x" создаёт только новый файл, поэтому при сбое записи
-        # удаляем именно свой неполный файл: он не блокирует повторный запуск.
-        stream = args.output.open("x", encoding="utf-8", newline="")
-        try:
-            with stream:
-                stream.write(formatted)
-        except BaseException:
-            args.output.unlink(missing_ok=True)
-            raise
+        _write_new(args.output, formatted)
         return OK
     _write(sys.stdout, formatted)
     return OK
@@ -386,6 +465,11 @@ def main(argv: list[str] | None = None) -> int:
     for name in args.files:
         try:
             result = _process(name, args)
+        except BrokenPipeError:
+            # Читатель вывода закрылся (bslfmt … | head): выходим тихо, код —
+            # по уже известному результату, остальные файлы не нужны.
+            _silence_stdout()
+            return max(code, NEEDS_FORMAT if args.check else OK)
         except (OSError, UnicodeError, LexerError, FormatError) as error:
             _report_error(f"{_display_name(name)}: {_describe(error, name)}")
             result = FAILED
