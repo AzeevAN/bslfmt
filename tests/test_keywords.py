@@ -184,6 +184,52 @@ class KeywordCaseTests(unittest.TestCase):
             "КонецПроцедуры\n",
         )
 
+    def test_dot_before_patch_region_and_english_words_after_it(self):
+        # «.» в конце строки перед областью правки не делает слово внутри
+        # области свойством (область дословна) и не переходит через неё.
+        self.check(
+            "Процедура П()\n"
+            "А = Объект.\n"
+            "#Вставка\n"
+            "новый;\n"
+            "#КонецВставки\n"
+            "если Б тогда В = 1; конецесли;\n"
+            "КонецПроцедуры\n",
+            "Процедура П()\n"
+            "\tА = Объект.\n"
+            "#Вставка\n"
+            "новый;\n"
+            "#КонецВставки\n"
+            "\tЕсли Б Тогда\n\t\tВ = 1;\n\tКонецЕсли;\n"
+            "КонецПроцедуры\n",
+        )
+        # Английские слова сразу после области правки (и после английской
+        # директивы области) получают свой канонический регистр.
+        self.check(
+            "Procedure P()\n"
+            "if a then\n"
+            "#Insert\n"
+            "x = 1;\n"
+            "#EndInsert\n"
+            "endif;\n"
+            "#Delete\n"
+            "y = 2;\n"
+            "#EndDelete\n"
+            "return;\n"
+            "EndProcedure\n",
+            "Procedure P()\n"
+            "\tIf a Then\n"
+            "#Insert\n"
+            "x = 1;\n"
+            "#EndInsert\n"
+            "\tEndIf;\n"
+            "#Delete\n"
+            "y = 2;\n"
+            "#EndDelete\n"
+            "\tReturn;\n"
+            "EndProcedure\n",
+        )
+
     def test_directive_with_space_comment_and_crlf(self):
         self.check(
             "# если сервер тогда // если тогда\r\nА = истина;\r\n#конецесли\r\n",
