@@ -19,7 +19,22 @@ from .lexer import (
     _token_rows,
     lex,
 )
-from .keywords import canonical_case
+from .keywords import (
+    BLOCK_END_WORDS,
+    BREAK_AFTER,
+    BREAK_BEFORE,
+    CONDITIONAL_DIRECTIVE_KINDS,
+    CONTINUATION_WORDS,
+    ENGLISH_STRUCTURAL,
+    EXPORT_WORDS,
+    EXPRESSION_STARTERS,
+    LOOP_WORDS,
+    REGION_DIRECTIVES,
+    RETURN_WORDS,
+    THEN_WORDS,
+    TRAILING_WORDS,
+    canonical_case,
+)
 from .wrap import LINE_WIDTH, TAB_WIDTH, wrap_statement
 
 
@@ -69,43 +84,12 @@ _BRANCH = {
     "Иначе": None,
     "Исключение": "Попытка",
 }
-# Английские формы взяты из пар ru/en в шаблонах .st локального shlang_ru.hbk:
-# def_Proc/Func, struct_IfThenElif, For/ForEach, While и TryCatch.
-_ENGLISH_STRUCTURAL = {
-    "procedure": "Процедура",
-    "endprocedure": "КонецПроцедуры",
-    "function": "Функция",
-    "endfunction": "КонецФункции",
-    "if": "Если",
-    "elsif": "ИначеЕсли",
-    "elseif": "ИначеЕсли",
-    "else": "Иначе",
-    "endif": "КонецЕсли",
-    "for": "Для",
-    "while": "Пока",
-    "enddo": "КонецЦикла",
-    "try": "Попытка",
-    "except": "Исключение",
-    "endtry": "КонецПопытки",
-}
+# Слово в любом регистре и языке → русское структурное слово.
 _CANONICAL = {
     keyword.casefold(): keyword
     for keyword in (*_OPEN, *_CLOSE, *_BRANCH)
 }
-_CANONICAL.update(_ENGLISH_STRUCTURAL)
-_THEN_WORDS = frozenset({"тогда", "then"})
-# Слова, после которых начинается выражение: знак за ними унарный.
-_EXPRESSION_STARTERS = frozenset({
-    "возврат", "return",
-    "не", "not",
-    "и", "and",
-    "или", "or",
-    "если", "if",
-    "иначеесли", "elsif", "elseif",
-    "пока", "while",
-    "по", "to",
-    "из", "in",
-})
+_CANONICAL.update(ENGLISH_STRUCTURAL)
 
 
 @dataclass
@@ -140,24 +124,6 @@ class _Conditional:
 def _copy_stack(stack: list[_Block]) -> list[_Block]:
     return [_Block(block.opener, block.branch, block.line) for block in stack]
 
-
-_REGION_DIRECTIVES = {
-    "область": "open",
-    "region": "open",
-    "конецобласти": "close",
-    "endregion": "close",
-}
-_CONDITIONAL_DIRECTIVES = {
-    "если": "если",
-    "if": "если",
-    "иначеесли": "иначеесли",
-    "elsif": "иначеесли",
-    "elseif": "иначеесли",
-    "иначе": "иначе",
-    "else": "иначе",
-    "конецесли": "конецесли",
-    "endif": "конецесли",
-}
 
 
 def _masked_code(
@@ -223,7 +189,7 @@ def _ends_operand(token) -> bool:
     if re.search(r"(?<!\w)(?:\d+(?:[.,]\d*)?|[.,]\d+)[EeЕе]$", tail):
         return False
     last_word = re.search(r"\w+$", tail)
-    if last_word and last_word.group().casefold() in _EXPRESSION_STARTERS:
+    if last_word and last_word.group().casefold() in EXPRESSION_STARTERS:
         return False
     return text[-1].isalnum() or text[-1] in "_)]}"
 
@@ -387,12 +353,12 @@ def _line_keywords(code: str) -> list[tuple[str, int]]:
 
 def _has_then(code: str) -> bool:
     """Распознать оба написания завершителя условия, не меняя исходный текст."""
-    return _word_end(code, _THEN_WORDS) is not None
+    return _word_end(code, THEN_WORDS) is not None
 
 
 def _has_loop_terminator(code: str) -> bool:
     """Распознать Цикл/Do как завершитель заголовка цикла."""
-    return _word_end(code, {"цикл", "do"}) is not None
+    return _word_end(code, LOOP_WORDS) is not None
 
 
 def _word_end(code: str, words: set[str] | frozenset[str]) -> int | None:
@@ -404,9 +370,9 @@ def _word_end(code: str, words: set[str] | frozenset[str]) -> int | None:
 
 def _header_terminator_end(header_kind: str, code: str) -> int | None:
     if header_kind in {"Если", "ИначеЕсли"}:
-        return _word_end(code, _THEN_WORDS)
+        return _word_end(code, THEN_WORDS)
     if header_kind in {"Для", "Пока"}:
-        return _word_end(code, {"цикл", "do"})
+        return _word_end(code, LOOP_WORDS)
     return None
 
 
@@ -451,7 +417,8 @@ def _format_active_code(
 # продолжается на следующей. Слово после «.» — имя свойства (Объект.Или), не
 # оператор.
 _TRAILING_OPERATOR = re.compile(
-    r"(?:[+*/%=<>,.-]|(?<!\.)\b(?:И|ИЛИ|НЕ|AND|OR|NOT|НОВЫЙ|NEW)\b)\s*$", re.IGNORECASE)
+    r"(?:[+*/%=<>,.-]|(?<!\.)\b(?:" + "|".join(sorted(TRAILING_WORDS)) + r")\b)\s*$",
+    re.IGNORECASE)
 
 
 def _ends_with_block_word(code_tail: str) -> bool:
@@ -460,7 +427,7 @@ def _ends_with_block_word(code_tail: str) -> bool:
     if not last_word:
         return False
     word = last_word[-1]
-    if word.casefold() not in _BLOCK_END_WORDS or not code_tail.endswith(word):
+    if word.casefold() not in BLOCK_END_WORDS or not code_tail.endswith(word):
         return False
     # Цифра перед словом («1КонецЕсли») — часть другого слова.
     before = code_tail[-len(word) - 1:-len(word)]
@@ -476,21 +443,14 @@ def _ends_with_bare_return(code_tail: str) -> bool:
     if code_tail[-1:] not in ("т", "Т", "n", "N"):
         # Почти все строки кончаются «;» — отсекаем без сравнения слов.
         return False
-    for word in ("возврат", "return"):
+    for word in RETURN_WORDS:
         if code_tail[-len(word):].casefold() == word:
             before = code_tail[-len(word) - 1:-len(word)]
             return not before or not (before.isalnum() or before in "_.")
     return False
 
 
-_CONTINUATION_WORDS = frozenset({"и", "или", "and", "or"})
 _CONTINUATION_START = re.compile(r"[ \t\f]*(?:[-+*/%=<>.\[,)\"']|<>|<=|>=)")
-_BLOCK_END_WORDS = frozenset({
-    "тогда", "then", "цикл", "do", "иначе", "else", "попытка", "try",
-    "исключение", "except", "конецесли", "endif", "конеццикла", "enddo",
-    "конецпопытки", "endtry", "конецпроцедуры", "endprocedure",
-    "конецфункции", "endfunction",
-})
 
 
 def _starts_continuation(line: str, code: str) -> bool:
@@ -502,7 +462,7 @@ def _starts_continuation(line: str, code: str) -> bool:
     if _CONTINUATION_START.match(line):
         return True
     match = _IDENTIFIER.match(code.lstrip(" \t\f"))
-    return bool(match) and match.group().casefold() in _CONTINUATION_WORDS
+    return bool(match) and match.group().casefold() in CONTINUATION_WORDS
 
 
 def _scan_directives(
@@ -526,8 +486,8 @@ def _scan_directives(
         if not original_name:
             raise FormatError("директива без имени")
         name = original_name.casefold()
-        region_kind = _REGION_DIRECTIVES.get(name)
-        conditional_kind = _CONDITIONAL_DIRECTIVES.get(name)
+        region_kind = REGION_DIRECTIVES.get(name)
+        conditional_kind = CONDITIONAL_DIRECTIVE_KINDS.get(name)
         if region_kind:
             region_lines.add(number)
             if region_kind == "open":
@@ -1068,7 +1028,7 @@ class _LineFormatter:
         if self.statement_open and _starts_continuation(line, code):
             return True
         return self.declaration_open and (
-            code.strip(" \t\f\r\n").casefold() in {"экспорт", "export"})
+            code.strip(" \t\f\r\n").casefold() in EXPORT_WORDS)
 
     def _start_statement(self, number: int) -> None:
         self.stmt_start = len(self.result)
@@ -1148,7 +1108,7 @@ class _LineFormatter:
         leading = (self.statement_open and not was_continuation
                    and self.pending_header is None and _starts_continuation(line, code))
         export_tail = (self.declaration_open and not was_continuation
-                       and code.strip(" \t\f\r\n").casefold() in {"экспорт", "export"})
+                       and code.strip(" \t\f\r\n").casefold() in EXPORT_WORDS)
         if leading or export_tail:
             # Продолжение инструкции предыдущей строки.
             self.continuation_depth = self.statement_depth_for_continuation
@@ -1502,14 +1462,6 @@ def _collapse_blank_lines(text: str) -> str:
 
 # Перенос строк (решение владельца 2026-09-28): каждая инструкция — на своей
 # строке, тело блока — со следующей строки, концы блоков и ветви — отдельно.
-_BREAK_AFTER = frozenset({
-    "тогда", "then", "цикл", "do", "попытка", "try", "иначе", "else",
-    "исключение", "except",
-})
-_BREAK_BEFORE = frozenset({
-    "конецесли", "endif", "конеццикла", "enddo", "конецпопытки", "endtry",
-    "иначе", "else", "иначеесли", "elsif", "elseif", "исключение", "except",
-})
 # Строки маски, где может понадобиться перенос: код после «;» или после
 # слова-начала тела, код перед концом блока или ветвью. Точные места
 # выбирает _break_points; здесь нужен быстрый поиск кандидатов по всему
@@ -1517,7 +1469,7 @@ _BREAK_BEFORE = frozenset({
 # учёта регистра по кириллице перебирает каждую позицию и втрое медленнее).
 _CODE_AFTER_SEMICOLON = re.compile(r";[ \t\f]*[^\s;]")
 _BREAK_WORD_SEARCH = tuple(
-    (word, re.compile(word)) for word in sorted(_BREAK_AFTER | _BREAK_BEFORE)
+    (word, re.compile(word)) for word in sorted(BREAK_AFTER | BREAK_BEFORE)
 )
 _NEWLINE = re.compile(r"\r\n|\r|\n")
 
@@ -1543,10 +1495,10 @@ def _break_points(masked_line: str) -> list[int]:
         if match.start() and body[match.start() - 1] == ".":
             continue
         word = match.group().casefold()
-        if word in _BREAK_BEFORE and match.start() > first_code:
+        if word in BREAK_BEFORE and match.start() > first_code:
             points.add(match.start())
         # «Цикл;», «Иначе;» — пустая инструкция: остаётся при слове.
-        if word in _BREAK_AFTER and code_follows(match.end()):
+        if word in BREAK_AFTER and code_follows(match.end()):
             points.add(match.end())
     for match in re.finditer(";", body):
         if code_follows(match.end()):
@@ -1572,12 +1524,12 @@ def _break_candidates(masked: str) -> list[int]:
                 continue
             if end < len(lower) and (lower[end].isalnum() or lower[end] == "_"):
                 continue
-            if word in _BREAK_AFTER:
+            if word in BREAK_AFTER:
                 following = _NEXT_CHAR.match(lower, end)
                 if following is not None and following.group(1) not in ";\r\n":
                     positions.append(start)
                     continue
-            if word in _BREAK_BEFORE:
+            if word in BREAK_BEFORE:
                 if line_starts is None:
                     line_starts = [0]
                     line_starts.extend(match.end() for match in _NEWLINE.finditer(lower))

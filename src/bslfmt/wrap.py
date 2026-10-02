@@ -10,6 +10,16 @@ from __future__ import annotations
 
 import re
 
+from .keywords import (
+    AND_WORDS,
+    ASYNC_WORDS,
+    DECLARATIONS,
+    EXPRESSION_STARTERS,
+    OR_WORDS,
+    SPACED_KEYWORDS,
+    STRUCTURAL_INSIDE,
+)
+
 LINE_WIDTH = 120
 TAB_WIDTH = 4
 # Защита от недоверенного ввода: сверх пределов инструкция не трогается.
@@ -25,31 +35,10 @@ _UNIT = re.compile(
     r"|(?P<punct>[()\[\],;.?])"
     r"|(?P<space>[ \t\f\r\n]+)"
 )
-# Слова, после которых начинается выражение (как _EXPRESSION_STARTERS
-# форматтера) и после которых перед «(» и знаком нужен пробел.
-_KEYWORDS = frozenset({
-    "возврат", "return", "не", "not", "и", "and", "или", "or",
-    "если", "if", "иначеесли", "elsif", "elseif", "пока", "while",
-    "для", "for", "каждого", "each", "по", "to", "из", "in",
-    "тогда", "then", "цикл", "do", "новый", "new",
-})
-_EXPRESSION_STARTERS = frozenset({
-    "возврат", "return", "не", "not", "и", "and", "или", "or",
-    "если", "if", "иначеесли", "elsif", "elseif", "пока", "while",
-    "по", "to", "из", "in",
-})
 # Места разреза шага 1 по порядку приоритета.
-_SPLIT_LEVELS = (frozenset({"или", "or"}), frozenset({"и", "and"}), frozenset({"+"}))
+_SPLIT_LEVELS = (OR_WORDS, AND_WORDS, frozenset({"+"}))
+_LEAD_OPERATORS = OR_WORDS | AND_WORDS
 _NO_OPERATOR_SPLIT = frozenset({"для", "for"})
-_DECLARATIONS = frozenset({"процедура", "функция", "procedure", "function"})
-_ASYNC = frozenset({"асинх", "async"})
-# Структурные слова внутри инструкции: при сомнении — не трогаем.
-_STRUCTURAL_INSIDE = frozenset({
-    "конецесли", "endif", "конеццикла", "enddo", "конецпопытки", "endtry",
-    "конецпроцедуры", "endprocedure", "конецфункции", "endfunction",
-    "иначе", "else", "иначеесли", "elsif", "elseif", "исключение", "except",
-    "попытка", "try", "процедура", "procedure", "функция", "function",
-})
 
 
 class _Units:
@@ -96,7 +85,7 @@ class _Units:
         if kind in ("string", "date", "number"):
             return True
         if kind == "word":
-            return self.after_dot(index) or self.folded[index] not in _EXPRESSION_STARTERS
+            return self.after_dot(index) or self.folded[index] not in EXPRESSION_STARTERS
         return self.texts[index] in (")", "]")
 
 
@@ -129,7 +118,7 @@ def _units(code: str) -> _Units | None:
         return None
     units.gaps = gaps
     # «Асинх Процедура …» — объявление, слово объявления не внутри инструкции.
-    declaration = 1 if units.folded[0] in _ASYNC and len(texts) > 1 else 0
+    declaration = 1 if units.folded[0] in ASYNC_WORDS and len(texts) > 1 else 0
     for index in range(1, len(texts)):
         # Подряд идущие литералы — многострочная строка (справка 1С,
         # «Строка»): переносы между ними не трогаем.
@@ -139,10 +128,10 @@ def _units(code: str) -> _Units | None:
         if texts[index] == "/" and texts[index - 1] == "/":
             return None
         if (kinds[index] == "word" and texts[index - 1] != "."
-                and units.folded[index] in _STRUCTURAL_INSIDE
-                and not (index == declaration and units.folded[index] in _DECLARATIONS)):
+                and units.folded[index] in STRUCTURAL_INSIDE
+                and not (index == declaration and units.folded[index] in DECLARATIONS)):
             return None
-    if units.folded[declaration] in _DECLARATIONS and ";" in texts:
+    if units.folded[declaration] in DECLARATIONS and ";" in texts:
         # «Процедура П() А = 1;» — объявление с инструкцией в строке.
         return None
     return units
@@ -165,7 +154,7 @@ def _needs_space(units: _Units, left: int, right: int) -> bool:
     if a in (")", "]") and (b_word or b_literal):
         return True
     keyword = units.kinds[left] == "word" and not units.after_dot(left) and (
-        units.folded[left] in _KEYWORDS)
+        units.folded[left] in SPACED_KEYWORDS)
     if keyword and (b in ("(", "[", "?") or units.kinds[right] == "op"):
         return True
     if units.kinds[left] == "op" and units.kinds[right] == "op":
@@ -180,7 +169,7 @@ def _render(units: _Units, start: int, stop: int, normalize) -> str:
     # шага 1 (+, И/Или/AND/OR). Унарные - и другие операторы пробел не получают.
     lead_operator = (
         (units.kinds[start] == "op" and units.texts[start] == "+") or
-        (units.kinds[start] == "word" and units.folded[start] in ("и", "and", "или", "or"))
+        (units.kinds[start] == "word" and units.folded[start] in _LEAD_OPERATORS)
     )
     gaps = units.gaps
     for index in range(start + 1, stop):
