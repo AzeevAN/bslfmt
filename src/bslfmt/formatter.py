@@ -447,7 +447,10 @@ def _format_active_code(
         raise
 
 
-_TRAILING_OPERATOR = re.compile(r"(?:[+*/%=<>,.-]|\b(?:И|ИЛИ|НЕ)\b)\s*$", re.IGNORECASE)
+# Знак или логический оператор в конце строки: выражение продолжается на
+# следующей. Слово после «.» — имя свойства (Объект.Или), не оператор.
+_TRAILING_OPERATOR = re.compile(
+    r"(?:[+*/%=<>,.-]|(?<!\.)\b(?:И|ИЛИ|НЕ|AND|OR|NOT)\b)\s*$", re.IGNORECASE)
 
 
 def _ends_with_block_word(code_tail: str) -> bool:

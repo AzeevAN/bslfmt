@@ -40,6 +40,25 @@ class FormatterTests(unittest.TestCase):
                 self.assertEqual(format_code(source), expected)
                 self.assertEqual(format_code(expected), expected)
 
+    def test_trailing_logical_operator_continues_statement(self):
+        # И/Или/Не и And/Or/Not в конце строки — продолжение выражения на
+        # следующей строке, в обоих языках одинаково.
+        for word in ("Или", "Or", "И", "And", "ИЛИ", "or"):
+            source = f"Процедура П()\nА = Б {word}\nC;\nКонецПроцедуры\n"
+            with self.subTest(word=word):
+                result = format_code(source)
+                self.assertIn(f"\tА = Б {word[0].upper() + word[1:].lower()} C;\n", result)
+                self.assertEqual(format_code(result), result)
+        long_name = "ОченьДлинноеИмяПеременной" * 3
+        for word in ("Или", "Or"):
+            source = (f"Процедура П()\nА = {long_name} {word}\n{long_name};\n"
+                      "КонецПроцедуры\n")
+            with self.subTest(long=word):
+                self.assertIn(f"\n\t\t{word} {long_name};\n", format_code(source))
+        # Свойство с именем оператора после «.» — не оператор.
+        self.assertEqual(format_code("Процедура П()\nА = Б.Or\nВ();\nКонецПроцедуры\n"),
+                         "Процедура П()\n\tА = Б.Or\n\tВ();\nКонецПроцедуры\n")
+
     def test_statement_after_semicolon_or_block_word_is_not_continuation(self):
         source = "Процедура П()\nЕсли А Тогда\nБ = 1;\nИначе\nВ = 2;\nКонецЕсли;\nКонецПроцедуры\n"
         expected = ("Процедура П()\n\tЕсли А Тогда\n\t\tБ = 1;\n\tИначе\n\t\tВ = 2;\n"
