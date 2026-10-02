@@ -115,6 +115,13 @@ class FormatterTests(FormatAssertions, unittest.TestCase):
                             verify._significant_units(formatter._token_rows(text))]
                 self.assertEqual(units(case["input"]), units(actual))
 
+    def test_letters_folding_into_keywords_are_not_keywords(self):
+        # «ſ» после casefold — «s»: «Elſe» не «Else», а идентификатор.
+        self.assertFormats("Если А Тогда\n    Elſe = 1;\nКонецЕсли;\n",
+                           "Если А Тогда\n\tElſe = 1;\nКонецЕсли;\n")
+        self.assertFormats("Если А Тогда Elſe = 1; КонецЕсли;\n",
+                           "Если А Тогда\n\tElſe = 1;\nКонецЕсли;\n")
+
     def test_identifiers_with_letters_outside_russian_alphabet(self):
         # Буквы «і», «ї», казахские «Қ», «Ү» — часть идентификатора: слово
         # внутри него («Цикл» в «ЦиклІнтервал») не структурное и не место

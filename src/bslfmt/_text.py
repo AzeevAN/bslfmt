@@ -40,3 +40,13 @@ _BLANK_OR_NEWLINE = " \t\f\r\n"
 
 def _is_word_char(char: str) -> bool:
     return char.isalnum() or char == "_"
+
+
+# Ключевые слова BSL — только из кириллицы и латиницы. casefold сводит к ним
+# и другие знаки («ſ» → «s», KELVIN SIGN → «k»): «Elſe» — не «Else».
+_PLAIN_WORD = re.compile(r"[A-Za-zА-Яа-яЁё]+")
+
+
+def _fold(word: str) -> str:
+    """Слово для сравнения с таблицами ключевых слов или "" — не может им быть."""
+    return word.casefold() if _PLAIN_WORD.fullmatch(word) else ""

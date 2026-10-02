@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from ._text import _BLANK, _BLANK_OR_NEWLINE, _KIND, _LINE, _NEWLINE, _START, _TEXT, _split_lines
+from ._text import _BLANK, _BLANK_OR_NEWLINE, _fold, _KIND, _LINE, _NEWLINE, _START, _TEXT, _split_lines
 from .keywords import EXPRESSION_STARTERS
 from .lexer import _lex_rows, _token_rows
 
@@ -47,7 +47,7 @@ def _ends_operand(token) -> bool:
     if re.search(r"(?<!\w)(?:\d+(?:[.,]\d*)?|[.,]\d+)[EeЕе]$", tail):
         return False
     last_word = re.search(r"\w+$", tail)
-    if last_word and last_word.group().casefold() in EXPRESSION_STARTERS:
+    if last_word and _fold(last_word.group()) in EXPRESSION_STARTERS:
         return False
     return text[-1].isalnum() or text[-1] in "_)]}"
 

@@ -105,9 +105,16 @@ def _write(stream, text: str) -> None:
     if buffer is None:
         stream.write(text)
         return
-    stream.flush()
-    buffer.write(text.encode("utf-8", "backslashreplace"))
-    buffer.flush()
+    try:
+        stream.flush()
+        buffer.write(text.encode("utf-8", "backslashreplace"))
+        buffer.flush()
+    except OSError as error:
+        # Закрытый канал на Windows — EINVAL, а не EPIPE: для stdout это тот
+        # же разрыв (bslfmt … | more), а не ошибка файла.
+        if stream is sys.stdout and error.errno == errno.EINVAL:
+            raise BrokenPipeError(errno.EPIPE, "Broken pipe") from error
+        raise
 
 
 def _report_error(text: str) -> None:

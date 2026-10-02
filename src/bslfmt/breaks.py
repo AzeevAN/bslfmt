@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from bisect import bisect_right
 
-from ._text import _BLANK, _END, _IDENTIFIER, _KIND, _NEWLINE, _START, _TEXT, _split_lines
+from ._text import _BLANK, _END, _IDENTIFIER, _KIND, _NEWLINE, _START, _TEXT, _fold, _split_lines
 from .keywords import BREAK_AFTER, BREAK_BEFORE
 from .lexer import _token_rows
 
@@ -90,7 +90,7 @@ def _break_points(masked_line: str) -> list[int]:
     for match in _IDENTIFIER.finditer(body):
         if match.start() and body[match.start() - 1] == ".":
             continue
-        word = match.group().casefold()
+        word = _fold(match.group())
         if word in BREAK_BEFORE and match.start() > first_code:
             points.add(match.start())
         # «Цикл;», «Иначе;» — пустая инструкция: остаётся при слове.

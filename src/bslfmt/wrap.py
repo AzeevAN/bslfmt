@@ -11,6 +11,8 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 
+from ._text import _fold
+
 from .keywords import (
     AND_WORDS,
     ASYNC_WORDS,
@@ -47,7 +49,7 @@ class _Units:
     def __init__(self, kinds: list[str], texts: list[str]) -> None:
         self.kinds = kinds
         self.texts = texts
-        self.folded = [text.casefold() for text in texts]
+        self.folded = [_fold(text) for text in texts]
         self.depth: list[int] = []
         self.pair: dict[int, int] = {}
         stack: list[int] = []

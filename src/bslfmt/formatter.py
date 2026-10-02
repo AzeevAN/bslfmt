@@ -17,6 +17,7 @@ from ._text import (
     _IDENTIFIER,
     _NEWLINE,
     _TEXT,
+    _fold,
     _is_word_char,
     _split_lines,
 )
@@ -131,7 +132,7 @@ def _line_keywords(code: str) -> list[tuple[str, int]]:
     for match in _IDENTIFIER.finditer(code):
         if match.start() and code[match.start() - 1] == ".":
             continue
-        keyword = _CANONICAL.get(match.group().casefold(), match.group())
+        keyword = _CANONICAL.get(_fold(match.group()), match.group())
         if keyword in _OPEN or keyword in _CLOSE or keyword in _BRANCH:
             found.append((keyword, match.start()))
     return found
@@ -149,7 +150,7 @@ def _has_loop_terminator(code: str) -> bool:
 
 def _word_end(code: str, words: set[str] | frozenset[str]) -> int | None:
     for match in _IDENTIFIER.finditer(code):
-        if match.group().casefold() in words:
+        if _fold(match.group()) in words:
             return match.end()
     return None
 
@@ -219,7 +220,7 @@ def _trailing_operator_start(code: str, start: int = 0) -> int | None:
     word_start = end
     while word_start > start and _is_word_char(code[word_start - 1]):
         word_start -= 1
-    if word_start == end or code[word_start:end].casefold() not in TRAILING_WORDS:
+    if word_start == end or _fold(code[word_start:end]) not in TRAILING_WORDS:
         return None
     if word_start > start and code[word_start - 1] == ".":
         return None
@@ -232,7 +233,7 @@ def _ends_with_block_word(code_tail: str) -> bool:
     if not last_word:
         return False
     word = last_word[-1]
-    if word.casefold() not in BLOCK_END_WORDS or not code_tail.endswith(word):
+    if _fold(word) not in BLOCK_END_WORDS or not code_tail.endswith(word):
         return False
     # Цифра перед словом («1КонецЕсли») — часть другого слова.
     before = code_tail[-len(word) - 1:-len(word)]
@@ -249,7 +250,7 @@ def _ends_with_bare_return(code_tail: str) -> bool:
         # Почти все строки кончаются «;» — отсекаем без сравнения слов.
         return False
     for word in RETURN_WORDS:
-        if code_tail[-len(word):].casefold() == word:
+        if _fold(code_tail[-len(word):]) == word:
             before = code_tail[-len(word) - 1:-len(word)]
             return not before or not (before.isalnum() or before in "_.")
     return False
@@ -267,7 +268,7 @@ def _starts_continuation(line: str, code: str) -> bool:
     if _CONTINUATION_START.match(line):
         return True
     match = _IDENTIFIER.match(code.lstrip(_BLANK))
-    return bool(match) and match.group().casefold() in CONTINUATION_WORDS
+    return bool(match) and _fold(match.group()) in CONTINUATION_WORDS
 
 
 def _scan_directives(
@@ -632,7 +633,7 @@ class _LineFormatter:
     def _is_export_tail(self, code: str) -> bool:
         """Строка из одного «Экспорт» после объявления без «;»."""
         return self.declaration_open and (
-            code.strip(_BLANK_OR_NEWLINE).casefold() in EXPORT_WORDS)
+            _fold(code.strip(_BLANK_OR_NEWLINE)) in EXPORT_WORDS)
 
     def _inside_method(self) -> bool:
         return bool(self.stack) and self.stack[0].opener in {"Процедура", "Функция"}

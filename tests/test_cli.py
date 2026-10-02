@@ -415,6 +415,27 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(main(arguments), expected)
                 self.assertEqual(stderr.getvalue(), "")
 
+    def test_closed_pipe_with_einval_is_silent(self):
+        # Так закрытый канал выглядит на Windows.
+        class Buffer:
+            def write(self, data):
+                raise OSError(22, "Invalid argument")
+
+            def flush(self):
+                pass
+
+        class Stdout:
+            buffer = Buffer()
+
+            def flush(self):
+                pass
+
+        path = self.write("м.bsl", UNFORMATTED)
+        stderr = StringIO()
+        with mock.patch("sys.stdout", Stdout()), redirect_stderr(stderr):
+            self.assertEqual(main(["--check", "--diff", str(path), str(path)]), 1)
+        self.assertEqual(stderr.getvalue(), "")
+
     def test_os_errors_name_paths_once_and_in_russian(self):
         cwd = os.getcwd()
         os.chdir(self.dir)
