@@ -105,7 +105,6 @@ _EXPRESSION_STARTERS = frozenset({
     "пока", "while",
     "по", "to",
     "из", "in",
-    "от", "до", "шаг",
 })
 
 
@@ -220,7 +219,8 @@ def _ends_operand(token) -> bool:
     # совпадение в конце полного текста остаётся совпадением в хвосте, а
     # служебные слова заметно короче хвоста.
     tail = text[-64:]
-    if re.search(r"(?:\d+(?:[.,]\d*)?|[.,]\d+)[EeЕе]$", tail):
+    # Число с порядком («1.5E-3»), но не идентификатор «Х1E».
+    if re.search(r"(?<!\w)(?:\d+(?:[.,]\d*)?|[.,]\d+)[EeЕе]$", tail):
         return False
     last_word = re.search(r"\w+$", tail)
     if last_word and last_word.group().casefold() in _EXPRESSION_STARTERS:

@@ -226,8 +226,8 @@ class _Layout:
             return _render(self.units, start, stop, self.normalize)
         return self.text[offsets[start]:offsets[stop - 1] + len(self.units.texts[stop - 1])]
 
-    def fits(self, depth: int, text: str) -> bool:
-        return _width(depth, text) <= LINE_WIDTH
+    def fits(self, depth: int, text: str, tail: int = 0) -> bool:
+        return _width(depth, text) + tail <= LINE_WIDTH
 
     def split_points(self, start: int, stop: int, level: frozenset) -> list[int]:
         units = self.units
@@ -256,10 +256,14 @@ class _Layout:
         return None
 
     def block(self, start: int, stop: int, depth: int, level: int,
-              operators: bool = True) -> list[tuple[int, str]] | None:
-        """Строки блока [start, stop) с базой depth или None — некуда резать."""
+              operators: bool = True, tail: int = 0) -> list[tuple[int, str]] | None:
+        """Строки блока [start, stop) с базой depth или None — некуда резать.
+
+        tail — сколько знаков допишут к последней строке блока (запятая
+        после параметра): она тоже должна влезть в ширину.
+        """
         text = self.render(start, stop)
-        if self.fits(depth, text):
+        if self.fits(depth, text, tail):
             return [(depth, text)]
         if operators:
             for index in range(level, len(_SPLIT_LEVELS)):
@@ -271,7 +275,8 @@ class _Layout:
                 for number in range(len(bounds) - 1):
                     part_depth = depth if number == 0 else depth + 1
                     a, b = bounds[number], bounds[number + 1]
-                    lines.extend(self.block(a, b, part_depth, index + 1)
+                    part_tail = tail if number == len(bounds) - 2 else 0
+                    lines.extend(self.block(a, b, part_depth, index + 1, tail=part_tail)
                                  or [(part_depth, self.render(a, b))])
                 return lines
         opening = self.last_pair(start, stop)
@@ -280,7 +285,7 @@ class _Layout:
         closing = self.units.pair[opening]
         head = (depth, self.render(start, opening + 1))
         inner = self.render(opening + 1, stop)
-        if self.fits(depth + 1, inner):
+        if self.fits(depth + 1, inner, tail):
             return [head, (depth + 1, inner)]
         lines = [head]
         for a, b, suffix in self.parameter_lines(opening + 1, closing):
@@ -289,7 +294,7 @@ class _Layout:
                 if self.fits(depth + 1, line_text):
                     lines.append((depth + 1, line_text))
                     continue
-                nested = self.block(a, b, depth + 1, 0)
+                nested = self.block(a, b, depth + 1, 0, tail=len(suffix))
                 if nested is None:
                     lines.append((depth + 1, line_text))
                 else:

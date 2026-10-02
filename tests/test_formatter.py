@@ -744,6 +744,21 @@ class FormatterTests(unittest.TestCase):
         small, large = elapsed(5_000), elapsed(20_000)
         self.assertLess(large, small * 8)
 
+    def test_binary_minus_after_identifiers_like_words_and_exponents(self):
+        # «До», «От», «Шаг» в BSL не ключевые слова, «Х1E» — идентификатор,
+        # а не число с порядком: знак после них бинарный.
+        cases = (
+            ("Х = До-От;\n", "Х = До - От;\n"),
+            ("Х = Шаг+1;\n", "Х = Шаг + 1;\n"),
+            ("Z = Х1E-2;\n", "Z = Х1E - 2;\n"),
+            ("Z = Х1Е+2;\n", "Z = Х1Е + 2;\n"),
+            ("А = 1.5E-3;\n", "А = 1.5E-3;\n"),
+            ("А = 2е+5;\n", "А = 2е+5;\n"),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(format_code(source), expected)
+
     def test_unary_minus_after_keywords_that_start_expressions(self):
         cases = (
             ("Return -X;\n", "Return -X;\n"),

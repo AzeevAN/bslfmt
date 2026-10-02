@@ -81,6 +81,14 @@ class WrapTests(unittest.TestCase):
         self.assertEqual(result, ["\tРезультат = ОбщийМодуль.Ф(х).Г(",
                                   "\t\t" + long + ").Свойство;"])
 
+    def test_parameter_with_comma_fits_limit(self):
+        # Параметр ровно в 120 без запятой после неё — 121: режется по «Или».
+        code = f"Ф(А, {'Б' * 53} Или {'В' * 54}, Г);"
+        result = wrap(code)
+        self.assertTrue(all(len(line.expandtabs(4)) <= LINE_WIDTH for line in result), result)
+        self.assertIn("\t\t\tИли " + "В" * 54 + ",", result)
+        self.assertEqual(wrap("\n".join(result)), result)
+
     def test_skipped_parameters(self):
         self.assertWrap(
             'СообщитьПользователю(ТекстСообщенияОбОшибкеКоторыйОченьДлинный, , '
