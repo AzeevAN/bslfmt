@@ -10,7 +10,7 @@ from io import StringIO
 from pathlib import Path
 from unittest import mock
 
-from bslfmt import FormatError, LexerError, format_code, formatter, lex, restore
+from bslfmt import FormatError, LexerError, breaks, format_code, formatter, lex, restore, spacing, verify
 from bslfmt.__main__ import main
 
 
@@ -122,7 +122,7 @@ class FormatterTests(unittest.TestCase):
                 # пробелов перед «|».
                 def units(text):
                     return [unit[:2] for unit in
-                            formatter._significant_units(formatter._token_rows(text))]
+                            verify._significant_units(formatter._token_rows(text))]
                 self.assertEqual(units(case["input"]), units(actual))
 
     def test_identifiers_with_letters_outside_russian_alphabet(self):
@@ -773,8 +773,8 @@ class FormatterTests(unittest.TestCase):
         ]
         for source in sources:
             with self.subTest(source=source[:40]):
-                broken, masked, first_lines = formatter._break_lines(source)
-                self.assertEqual(masked, formatter._masked_code(broken))
+                broken, masked, first_lines = breaks._break_lines(source)
+                self.assertEqual(masked, breaks._masked_code(broken))
                 if first_lines is not None:
                     self.assertNotEqual(broken, source)
 
@@ -1029,7 +1029,7 @@ class FormatterTests(unittest.TestCase):
         )
         for source, expected in cases:
             with self.subTest(source=source):
-                self.assertEqual(formatter._normalize_spacing(source), expected)
+                self.assertEqual(spacing._normalize_spacing(source), expected)
 
     def test_source_is_lexed_once_without_patch_regions(self):
         source = "Процедура П()\nА=1;\nКонецПроцедуры\n"
@@ -1133,8 +1133,8 @@ class FormatterTests(unittest.TestCase):
         )
         for line, expected in cases:
             with self.subTest(line=line):
-                self.assertEqual(formatter._normalize_spacing(line + "\n"), expected + "\n")
-                self.assertEqual(formatter._normalize_spacing(expected + "\n"), expected + "\n")
+                self.assertEqual(spacing._normalize_spacing(line + "\n"), expected + "\n")
+                self.assertEqual(spacing._normalize_spacing(expected + "\n"), expected + "\n")
         self.assertEqual(
             format_code("Процедура П()\nФ(1,\n  2 ,3\n  );\nКонецПроцедуры\n#Если Сервер Тогда // а,б\n#КонецЕсли\n"),
             "Процедура П()\n\tФ(1, 2, 3);\nКонецПроцедуры\n#Если Сервер Тогда // а,б\n#КонецЕсли\n",
@@ -1147,16 +1147,16 @@ class FormatterTests(unittest.TestCase):
         )
 
     def test_significant_check_splits_code_into_words_and_signs(self):
-        formatter._check_significant_tokens("Ф(Б,В);\n", "Ф(Б, В);\n")
+        verify._check_significant_tokens("Ф(Б,В);\n", "Ф(Б, В);\n")
         for before, after in (("А Б;\n", "АБ;\n"), ("Ф(Б,В);\n", "Ф(БВ,);\n")):
             with self.subTest(before=before), self.assertRaises(FormatError):
-                formatter._check_significant_tokens(before, after)
+                verify._check_significant_tokens(before, after)
 
     def test_significant_check_is_not_fooled_by_signature_marks(self):
         with self.assertRaises(FormatError):
-            formatter._check_significant_tokens("А Б;\n", "А\x00Б;\n")
+            verify._check_significant_tokens("А Б;\n", "А\x00Б;\n")
         # тот же код с управляющим символом — без отказа
-        formatter._check_significant_tokens("А\x01Б;\n", "А\x01Б;\n")
+        verify._check_significant_tokens("А\x01Б;\n", "А\x01Б;\n")
 
     def test_at_most_one_blank_line_in_a_row(self):
         cases = (

@@ -1,7 +1,7 @@
 import time
 import unittest
 
-from bslfmt.formatter import _normalize_spacing
+from bslfmt.spacing import _normalize_spacing
 from bslfmt.wrap import LINE_WIDTH, may_need_wrap, wrap_statement
 
 

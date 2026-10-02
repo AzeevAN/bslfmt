@@ -15,8 +15,9 @@ import tempfile
 from importlib import metadata
 from pathlib import Path
 
+from ._text import _split_lines
 from .formatter import DEFAULT_MAX_CHARS, FormatError, format_code
-from .lexer import LexerError, _split_lines
+from .lexer import LexerError
 
 HELP = """\
 Использование: bslfmt [режим] ФАЙЛ [ФАЙЛ ...]
