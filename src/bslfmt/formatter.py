@@ -18,6 +18,7 @@ from ._text import (
     _NEWLINE,
     _TEXT,
     _fold,
+    _is_name_after,
     _is_word_char,
     _split_lines,
 )
@@ -130,7 +131,7 @@ def _line_keywords(code: str) -> list[tuple[str, int]]:
     """Найти структурные слова вне строк и комментариев в порядке появления."""
     found = []
     for match in _IDENTIFIER.finditer(code):
-        if match.start() and code[match.start() - 1] == ".":
+        if _is_name_after(code, match.start()):
             continue
         keyword = _CANONICAL.get(_fold(match.group()), match.group())
         if keyword in _OPEN or keyword in _CLOSE or keyword in _BRANCH:
@@ -150,7 +151,7 @@ def _has_loop_terminator(code: str) -> bool:
 
 def _word_end(code: str, words: set[str] | frozenset[str]) -> int | None:
     for match in _IDENTIFIER.finditer(code):
-        if _fold(match.group()) in words:
+        if _fold(match.group()) in words and not _is_name_after(code, match.start()):
             return match.end()
     return None
 
@@ -222,7 +223,7 @@ def _trailing_operator_start(code: str, start: int = 0) -> int | None:
         word_start -= 1
     if word_start == end or _fold(code[word_start:end]) not in TRAILING_WORDS:
         return None
-    if word_start > start and code[word_start - 1] == ".":
+    if word_start > start and _is_name_after(code, word_start):
         return None
     return word_start
 
@@ -237,7 +238,8 @@ def _ends_with_block_word(code_tail: str) -> bool:
         return False
     # Цифра перед словом («1КонецЕсли») — часть другого слова.
     before = code_tail[-len(word) - 1:-len(word)]
-    return not before or not (_is_word_char(before) or before == ".")
+    return not before or not (
+        _is_word_char(before) or _is_name_after(code_tail, len(code_tail) - len(word)))
 
 
 def _ends_with_bare_return(code_tail: str) -> bool:
@@ -252,7 +254,8 @@ def _ends_with_bare_return(code_tail: str) -> bool:
     for word in RETURN_WORDS:
         if _fold(code_tail[-len(word):]) == word:
             before = code_tail[-len(word) - 1:-len(word)]
-            return not before or not (before.isalnum() or before in "_.")
+            return not before or not (
+                _is_word_char(before) or _is_name_after(code_tail, len(code_tail) - len(word)))
     return False
 
 

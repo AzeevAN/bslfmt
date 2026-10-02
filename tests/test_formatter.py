@@ -122,6 +122,20 @@ class FormatterTests(FormatAssertions, unittest.TestCase):
         self.assertFormats("Если А Тогда Elſe = 1; КонецЕсли;\n",
                            "Если А Тогда\n\tElſe = 1;\nКонецЕсли;\n")
 
+    def test_label_named_like_keyword_is_not_structural(self):
+        # Метка — идентификатор после «~» (справка, «Перейти»); в рабочих
+        # конфигурациях встречаются ~Возврат, ~И, ~попытка.
+        body = "Перейти ~{0};\n~{0}:\nА = 1;"
+        for word in ("Если", "Цикл", "попытка", "КонецЕсли", "Иначе", "Тогда", "Возврат", "И"):
+            with self.subTest(word=word):
+                self.assertFormats(
+                    "Процедура П()\n" + body.format(word) + "\nКонецПроцедуры\n",
+                    f"Процедура П()\n\tПерейти ~{word};\n\t~{word}:\n\tА = 1;\nКонецПроцедуры\n")
+        self.assertFormats(
+            "Процедура П()\nЕсли Б Тогда Перейти ~Если; КонецЕсли;\n~Если: А = 1;\nКонецПроцедуры\n",
+            "Процедура П()\n\tЕсли Б Тогда\n\t\tПерейти ~Если;\n\tКонецЕсли;\n"
+            "\t~Если: А = 1;\nКонецПроцедуры\n")
+
     def test_identifiers_with_letters_outside_russian_alphabet(self):
         # Буквы «і», «ї», казахские «Қ», «Ү» — часть идентификатора: слово
         # внутри него («Цикл» в «ЦиклІнтервал») не структурное и не место

@@ -50,3 +50,18 @@ _PLAIN_WORD = re.compile(r"[A-Za-zА-Яа-яЁё]+")
 def _fold(word: str) -> str:
     """Слово для сравнения с таблицами ключевых слов или "" — не может им быть."""
     return word.casefold() if _PLAIN_WORD.fullmatch(word) else ""
+
+
+def _is_name_after(text: str, start: int) -> bool:
+    """Слово с позиции start — имя, а не ключевое слово.
+
+    После «.» — свойство или метод (Объект.Если), после «~» — метка
+    (Перейти ~Если; ~Если:): метка — идентификатор, и ключевые слова как
+    имена меток в рабочих конфигурациях встречаются.
+    """
+    if start and text[start - 1] == ".":
+        return True
+    position = start
+    while position and text[position - 1] in _BLANK:
+        position -= 1
+    return bool(position) and text[position - 1] == "~"
