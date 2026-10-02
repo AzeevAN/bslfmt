@@ -2,7 +2,7 @@
 
 import unittest
 
-from bslfmt import format_code
+from bslfmt import FormatError, format_code
 from bslfmt.keywords import canonical_case
 from bslfmt.lexer import _token_rows
 
@@ -76,7 +76,6 @@ class KeywordCaseTests(unittest.TestCase):
             "if A and not B or true then\n"
             "for each R in T do break; enddo;\n"
             "elsif A then\n"
-            "elseif B then\n"
             "else\n"
             "A = new Array; return;\n"
             "endif;\n"
@@ -87,13 +86,19 @@ class KeywordCaseTests(unittest.TestCase):
             "\t\t\tBreak;\n"
             "\t\tEndDo;\n"
             "\tElsIf A Then\n"
-            "\tElseIf B Then\n"
             "\tElse\n"
             "\t\tA = New Array;\n"
             "\t\tReturn;\n"
             "\tEndIf;\n"
             "EndProcedure\n",
         )
+
+    def test_elseif_is_not_a_keyword(self):
+        # В BSL только ElsIf (синтакс-помощник, грамматика 1c-syntax:
+        # ELSIF_KEYWORD — «ИНАЧЕЕСЛИ» | «ELSIF»); ElseIf — идентификатор.
+        self.check("If A Then\nelseif = 1;\nEndIf;\n", "If A Then\n\telseif = 1;\nEndIf;\n")
+        with self.assertRaises(FormatError):
+            format_code("#If Server Then\n#ElseIf Client Then\n#EndIf\n")
 
     def test_literals_comments_and_identifiers_untouched(self):
         source = (

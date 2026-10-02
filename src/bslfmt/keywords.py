@@ -34,7 +34,6 @@ ENGLISH_STRUCTURAL = {
     "endfunction": "КонецФункции",
     "if": "Если",
     "elsif": "ИначеЕсли",
-    "elseif": "ИначеЕсли",
     "else": "Иначе",
     "endif": "КонецЕсли",
     "for": "Для",
@@ -55,7 +54,7 @@ AND_WORDS = _folded("И", "And")
 # Слова, после которых начинается выражение: знак за ними унарный.
 EXPRESSION_STARTERS = _folded(
     "Возврат", "Return", "Не", "Not", "И", "And", "Или", "Or",
-    "Если", "If", "ИначеЕсли", "ElsIf", "ElseIf", "Пока", "While",
+    "Если", "If", "ИначеЕсли", "ElsIf", "Пока", "While",
     "По", "To", "Из", "In",
 )
 # Слова, после которых при раскладке перед «(» и знаком нужен пробел.
@@ -81,7 +80,7 @@ BREAK_AFTER = _folded(
 )
 BREAK_BEFORE = _folded(
     "КонецЕсли", "EndIf", "КонецЦикла", "EndDo", "КонецПопытки", "EndTry",
-    "Иначе", "Else", "ИначеЕсли", "ElsIf", "ElseIf", "Исключение", "Except",
+    "Иначе", "Else", "ИначеЕсли", "ElsIf", "Исключение", "Except",
 )
 # Структурные слова внутри инструкции: раскладка её не трогает.
 STRUCTURAL_INSIDE = BREAK_BEFORE | DECLARATIONS | _folded(
@@ -99,7 +98,6 @@ CONDITIONAL_DIRECTIVE_KINDS = {
     "if": "если",
     "иначеесли": "иначеесли",
     "elsif": "иначеесли",
-    "elseif": "иначеесли",
     "иначе": "иначе",
     "else": "иначе",
     "конецесли": "конецесли",
@@ -115,7 +113,7 @@ _KEYWORDS = _table(
     "Попытка", "Исключение", "ВызватьИсключение", "КонецПопытки",
     "Новый", "Выполнить", "Перейти", "ДобавитьОбработчик", "УдалитьОбработчик",
     "Ждать", "Истина", "Ложь", "Неопределено", "Null", "И", "Или", "Не",
-    "If", "Then", "ElsIf", "ElseIf", "Else", "EndIf",
+    "If", "Then", "ElsIf", "Else", "EndIf",
     "For", "Each", "In", "To", "Do", "EndDo", "While",
     "Procedure", "EndProcedure", "Function", "EndFunction", "Async",
     "Var", "Val", "Export", "Return", "Break", "Continue",
@@ -127,7 +125,7 @@ _KEYWORDS = _table(
 # области (дальше — имя области, его не трогаем).
 _CONDITIONAL_DIRECTIVES = _table(
     "Если", "ИначеЕсли", "Иначе", "КонецЕсли",
-    "If", "ElsIf", "ElseIf", "Else", "EndIf",
+    "If", "ElsIf", "Else", "EndIf",
 )
 _OTHER_DIRECTIVES = _table("Область", "КонецОбласти", "Region", "EndRegion")
 _PREPROCESSOR_WORDS = _table(
