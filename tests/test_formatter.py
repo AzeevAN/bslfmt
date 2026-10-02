@@ -33,7 +33,7 @@ class FormatterTests(unittest.TestCase):
             ("Процедура П()\nА = Ф(Б)\n[0];\nКонецПроцедуры\n",
              "Процедура П()\n\tА = Ф(Б)[0];\nКонецПроцедуры\n"),
             ("If A\nThen\nB = C\nAND D;\nEndIf;\n",
-             "If A Then\n\tB = C AND D;\nEndIf;\n"),
+             "If A Then\n\tB = C And D;\nEndIf;\n"),
         )
         for source, expected in cases:
             with self.subTest(source=source):
@@ -471,7 +471,8 @@ class FormatterTests(unittest.TestCase):
         for symbol in symbols:
             source = f"#Если НЕ {symbol} Тогда\n#Иначе\n#КонецЕсли\n"
             with self.subTest(symbol=symbol):
-                self.assertEqual(format_code(source), source)
+                # Регистр операторов препроцессора приводится к каноническому.
+                self.assertEqual(format_code(source), source.replace("НЕ", "Не"))
 
         source = (
             "#If Client And NOT WebClient Then\n"
@@ -479,7 +480,7 @@ class FormatterTests(unittest.TestCase):
             "#Else\n"
             "#EndIf\n"
         )
-        self.assertEqual(format_code(source), source)
+        self.assertEqual(format_code(source), source.replace("NOT", "Not"))
 
     def test_preprocessor_branch_with_different_expression_state_fails_closed(self):
         source = (
@@ -1311,7 +1312,7 @@ class FormatterTests(unittest.TestCase):
         # строке, концы блоков и ветви — отдельной строкой (решение владельца).
         cases = (
             ("Процедура П()\nif Истина Тогда Сообщить(\"А\"); КонецЕсли;\nКонецПроцедуры\n",
-             "Процедура П()\n\tif Истина Тогда\n\t\tСообщить(\"А\");\n\tКонецЕсли;\nКонецПроцедуры\n"),
+             "Процедура П()\n\tIf Истина Тогда\n\t\tСообщить(\"А\");\n\tКонецЕсли;\nКонецПроцедуры\n"),
             # Иначе, несколько инструкций, комментарий в конце — у последней части
             ("Процедура П()\nЕсли А Тогда Б = 1; В = 2; Иначе Г(); КонецЕсли; // к\nКонецПроцедуры\n",
              "Процедура П()\n\tЕсли А Тогда\n\t\tБ = 1;\n\t\tВ = 2;\n\tИначе\n\t\tГ();\n"
@@ -1653,10 +1654,12 @@ class FormatterTests(unittest.TestCase):
         self.assertEqual(format_code(expected), expected)
 
     def test_keywords_are_case_insensitive(self):
+        # Ключевые слова распознаются в любом регистре и приводятся к
+        # каноническому написанию.
         source = "если Истина тогда\nСообщить(1);\nконецесли;\n"
         self.assertEqual(
             format_code(source),
-            "если Истина тогда\n\tСообщить(1);\nконецесли;\n",
+            "Если Истина Тогда\n\tСообщить(1);\nКонецЕсли;\n",
         )
 
     def test_keywords_inside_mixed_script_identifiers_are_not_structural(self):

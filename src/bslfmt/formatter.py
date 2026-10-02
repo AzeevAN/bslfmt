@@ -17,7 +17,9 @@ from .lexer import (
     LexerError,
     _split_lines,
     _token_rows,
+    lex,
 )
+from .keywords import canonical_case
 from .wrap import LINE_WIDTH, TAB_WIDTH, wrap_statement
 
 
@@ -1663,6 +1665,19 @@ def format_code(
     # Без областей расширения токены исходника нужны дважды — в форматировании
     # и в итоговой проверке; разбираем один раз.
     tokens = None if _patch_regions(body) else _token_rows(body)
+    # Регистр ключевых слов — до форматирования: дальше сверяется уже
+    # приведённый текст, а само приведение меняет только регистр букв.
+    rows = tokens if tokens is not None else [
+        (t.kind, t.text, t.start, t.end, t.line, t.column) for t in lex(body)
+    ]
+    cased = canonical_case(rows)
+    if cased is not None:
+        cased_body = "".join(row[_TEXT] for row in cased)
+        if len(cased_body) != len(body) or cased_body.casefold() != body.casefold():
+            raise FormatError("приведение регистра изменило текст")
+        body = cased_body
+        if tokens is not None:
+            tokens = cased
     # Перенос инструкций и тел блоков по строкам — до форматирования.
     broken, masked, first_lines = _break_lines(body, tokens)
     broken_tokens = tokens if first_lines is None or tokens is None else _token_rows(broken)
