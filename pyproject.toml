@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bslfmt"
-version = "0.26.0"
+version = "0.27.0"
 description = "Детерминированный форматтер кода 1С (BSL): отступы и пробелы по стандартам 1С"
 readme = "README.md"
 license = "Apache-2.0"
