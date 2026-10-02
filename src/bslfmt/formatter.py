@@ -61,6 +61,9 @@ DEFAULT_MAX_DEPTH = 100
 # слова считается во всех проходах (str.isalnum() или «_»). Иначе слово
 # внутри «ЦиклІнтервал» находилось одним проходом и не находилось другим.
 _IDENTIFIER = re.compile(r"[^\W\d]\w*")
+# Пробельные символы строки BSL (без переводов строк) и вместе с ними.
+_BLANK = " \t\f"
+_BLANK_OR_NEWLINE = " \t\f\r\n"
 # Поля кортежа токена (TokenRow): порядок полей Token.
 _KIND, _TEXT, _START, _END, _LINE = range(5)
 _NOT_NEWLINE = re.compile(r"[^\r\n]")
@@ -172,6 +175,12 @@ def _significant_neighbor(tokens, index: int, direction: int) -> int | None:
     return None
 
 
+# Сколько знаков с конца строки или токена смотреть, чтобы узнать последнее
+# слово: служебные слова заметно короче.
+_TAIL_WINDOW = 64
+_BLOCK_WORD_WINDOW = 32
+
+
 def _ends_operand(token) -> bool:
     if token[_KIND] in {"string", "date"}:
         return True
@@ -184,7 +193,7 @@ def _ends_operand(token) -> bool:
     # давал квадратичный откат на длинных числах и словах. Хвоста хватает:
     # совпадение в конце полного текста остаётся совпадением в хвосте, а
     # служебные слова заметно короче хвоста.
-    tail = text[-64:]
+    tail = text[-_TAIL_WINDOW:]
     # Число с порядком («1.5E-3»), но не идентификатор «Х1E».
     if re.search(r"(?<!\w)(?:\d+(?:[.,]\d*)?|[.,]\d+)[EeЕе]$", tail):
         return False
@@ -230,7 +239,7 @@ def _line_context(tokens) -> tuple[list[int], list[bool]]:
         newline = max(text.rfind("\n"), text.rfind("\r"))
         if newline >= 0:
             line_start = token[_START] + newline + 1
-            blank = not text[newline + 1:].strip(" \t\f")
+            blank = not text[newline + 1:].strip(_BLANK)
         elif token[_KIND] != "whitespace":
             blank = False
     return line_starts, indented
@@ -241,10 +250,10 @@ def _directive_line_starts(source: str) -> set[int]:
     starts = set()
     line_start = 0
     for newline in _NEWLINE.finditer(source):
-        if source[line_start:newline.start()].lstrip(" \t\f").startswith("#"):
+        if source[line_start:newline.start()].lstrip(_BLANK).startswith("#"):
             starts.add(line_start)
         line_start = newline.end()
-    if source[line_start:].lstrip(" \t\f").startswith("#"):
+    if source[line_start:].lstrip(_BLANK).startswith("#"):
         starts.add(line_start)
     return starts
 
@@ -423,7 +432,7 @@ _TRAILING_OPERATOR = re.compile(
 
 def _ends_with_block_word(code_tail: str) -> bool:
     """Кончается ли код словом начала/конца блока (не именем свойства после «.»)."""
-    last_word = _IDENTIFIER.findall(code_tail[-32:])
+    last_word = _IDENTIFIER.findall(code_tail[-_BLOCK_WORD_WINDOW:])
     if not last_word:
         return False
     word = last_word[-1]
@@ -461,7 +470,7 @@ def _starts_continuation(line: str, code: str) -> bool:
     """
     if _CONTINUATION_START.match(line):
         return True
-    match = _IDENTIFIER.match(code.lstrip(" \t\f"))
+    match = _IDENTIFIER.match(code.lstrip(_BLANK))
     return bool(match) and match.group().casefold() in CONTINUATION_WORDS
 
 
@@ -527,11 +536,11 @@ def _scan_directives(
 
 
 def _lead_width(line: str) -> int:
-    """Ширина ведущего отступа в колонках (табуляция — до кратного 4)."""
+    """Ширина ведущего отступа в колонках (табуляция — до кратного TAB_WIDTH)."""
     width = 0
     for char in line:
         if char == "\t":
-            width += 4 - width % 4
+            width += TAB_WIDTH - width % TAB_WIDTH
         elif char in " \f":
             width += 1
         else:
@@ -546,23 +555,27 @@ def _shift_lead(line: str, delta: int) -> str:
     снимается ровно delta колонок с начала, если это возможно; иначе отступ
     пересобирается из табов и пробелов.
     """
-    body = line.lstrip(" \t\f")
+    body = line.lstrip(_BLANK)
     lead = line[:len(line) - len(body)]
-    if delta > 0 and delta % 4 == 0:
-        return "\t" * (delta // 4) + line
+    if delta > 0 and delta % TAB_WIDTH == 0:
+        return "\t" * (delta // TAB_WIDTH) + line
     if delta < 0:
         removed = 0
         for index, char in enumerate(lead):
             if removed == -delta:
                 return lead[index:] + body
-            removed += 4 - removed % 4 if char == "\t" else 1
+            removed += TAB_WIDTH - removed % TAB_WIDTH if char == "\t" else 1
             if removed > -delta:
                 break
         else:
             if removed == -delta:
                 return body
-    width = max(0, _lead_width(line) + delta)
-    return "\t" * (width // 4) + " " * (width % 4) + body
+    return _lead_text(max(0, _lead_width(line) + delta)) + body
+
+
+def _lead_text(width: int) -> str:
+    """Отступ шириной width колонок: табы и остаток пробелами."""
+    return "\t" * (width // TAB_WIDTH) + " " * (width % TAB_WIDTH)
 
 
 def _continuation_indent(line: str, depth: int, delta: int = 0) -> str:
@@ -572,13 +585,13 @@ def _continuation_indent(line: str, depth: int, delta: int = 0) -> str:
     параметру. Выравнивание глубже стандартного сохраняется относительно
     инструкции: delta — на сколько колонок форматтер сдвинул её первую строку.
     """
-    if _lead_width(line) + delta <= depth * 4:
+    if _lead_width(line) + delta <= depth * TAB_WIDTH:
         return _reindent(line, depth)
     return _shift_lead(line, delta) if delta else line
 
 
 def _reindent(line: str, depth: int) -> str:
-    leading = len(line) - len(line.lstrip(" \t\f"))
+    leading = len(line) - len(line.lstrip(_BLANK))
     return "\t" * depth + line[leading:]
 
 
@@ -661,7 +674,7 @@ class _LineFormatter:
                 self.return_pending = False
                 self.pending_comments.clear()
                 if (self.stripped is not None and self._inside_method()
-                        and line.lstrip(" \t\f").startswith("//")):
+                        and line.lstrip(_BLANK).startswith("//")):
                     # Строка-комментарий BSL между строками литерала (лексер
                     # не считает её текстом строки): в значение не входит.
                     # Литерал на ней не кончается, состояние учтёт следующая.
@@ -674,13 +687,13 @@ class _LineFormatter:
                     self._start_statement(number)
                 self.stmt_blocked = True
                 self._string_tail_line(line, code)
-            elif not line.strip(" \t\f\r\n"):
+            elif not line.strip(_BLANK_OR_NEWLINE):
                 # Пустая строка внутри незаконченной инструкции входит в неё
                 # (раскладка её уберёт), иначе инструкция кончилась.
                 if not self._must_continue():
                     self._finish_statement()
                 self.result.append(line)
-            elif line.lstrip(" \t\f").startswith("//"):
+            elif line.lstrip(_BLANK).startswith("//"):
                 # Содержимое комментария не форматируется; отступ берётся у
                 # следующей строки кода (std456 п.7.3). Комментарий в колонке 0
                 # остаётся там: маркеры доработок (//!, //++, //{{) и код,
@@ -728,8 +741,8 @@ class _LineFormatter:
             if (number not in region_lines and number not in conditional_lines
                     and number not in self.opaque_lines):
                 self._note_line_end(line, code, inside_string)
-                if inside_string or (line.strip(" \t\f\r\n")
-                                     and not line.lstrip(" \t\f").startswith("//")):
+                if inside_string or (line.strip(_BLANK_OR_NEWLINE)
+                                     and not line.lstrip(_BLANK).startswith("//")):
                     self._note_statement_end(code, number, inside_string)
             elif number in region_lines or number in conditional_lines or (
                     number in self.opaque_lines):
@@ -754,12 +767,12 @@ class _LineFormatter:
         """
         if not self.pending_comments:
             return
-        leading = code_line[:len(code_line) - len(code_line.lstrip(" \t\f"))]
+        leading = code_line[:len(code_line) - len(code_line.lstrip(_BLANK))]
         if self.last_dedent:
             leading += "\t"
         for index in self.pending_comments:
             comment = self.result[index]
-            self.result[index] = leading + comment.lstrip(" \t\f")
+            self.result[index] = leading + comment.lstrip(_BLANK)
         self.pending_comments.clear()
 
     # Состояние
@@ -828,7 +841,7 @@ class _LineFormatter:
         признак сбрасывают; комментарии и пустые строки его не меняют,
         директивы сюда не попадают.
         """
-        code_tail = code.rstrip(" \t\f\r\n")
+        code_tail = code.rstrip(_BLANK_OR_NEWLINE)
         if not code_tail:
             if inside_string:
                 self.value_expected = False
@@ -843,7 +856,7 @@ class _LineFormatter:
 
     def _note_statement_end(self, code: str, number: int, inside_string: bool) -> None:
         """Запомнить, могла ли инструкция остаться незаконченной (нет «;»)."""
-        tail = code.rstrip(" \t\f\r\n")
+        tail = code.rstrip(_BLANK_OR_NEWLINE)
         if not tail:
             if inside_string:
                 # Литерал кончился в конце строки: инструкцию может продолжить
@@ -851,7 +864,7 @@ class _LineFormatter:
                 self.statement_open = True
             return
         block_end = _ends_with_block_word(tail)
-        body = tail.lstrip(" \t\f")
+        body = tail.lstrip(_BLANK)
         # Аннотация «&…» и метка «~Имя:» — границы инструкции.
         boundary = body.startswith("&") or (body.startswith("~") and tail.endswith(":"))
         self.statement_open = not tail.endswith(";") and not block_end and not boundary
@@ -909,11 +922,10 @@ class _LineFormatter:
         """
         if not self.literal_delta:
             return line
-        body = line.lstrip(" \t\f")
+        body = line.lstrip(_BLANK)
         if not body.startswith("|"):
             return line
-        width = max(0, _lead_width(line) + self.literal_delta)
-        return "\t" * (width // 4) + " " * (width % 4) + body
+        return _lead_text(max(0, _lead_width(line) + self.literal_delta)) + body
 
     def _region_line(self, line: str) -> None:
         if self.brackets or self.operator_continuation or self.pending_header is not None:
@@ -969,13 +981,13 @@ class _LineFormatter:
         _scan_brackets(code, self.brackets)
         # std444 п.5: условие продолжается со стандартным отступом или по
         # первому условию; строка с «)» в начале — на уровне заголовка.
-        same_level = line.lstrip(" \t\f").startswith(")")
+        same_level = line.lstrip(_BLANK).startswith(")")
         self.result.append(_continuation_indent(
             line, header_depth + (0 if same_level else 1), self.statement_delta
         ))
         if same_level:
             # Как в _continuation_line: +1 только над «)» на уровне заголовка.
-            self.last_dedent = _lead_width(self.result[-1]) <= header_depth * 4
+            self.last_dedent = _lead_width(self.result[-1]) <= header_depth * TAB_WIDTH
         if terminator_end is not None:
             self._complete_pending_header(header_kind)
             self.pending_header = None
@@ -996,7 +1008,7 @@ class _LineFormatter:
         """
         end = len(line.rstrip("\r\n"))
         line_start = self.offset - len(line)
-        position = len(code.rstrip(" \t\f\r\n"))
+        position = len(code.rstrip(_BLANK_OR_NEWLINE))
         while position < end:
             char = line[position]
             if char == '"':
@@ -1028,7 +1040,7 @@ class _LineFormatter:
         if self.statement_open and _starts_continuation(line, code):
             return True
         return self.declaration_open and (
-            code.strip(" \t\f\r\n").casefold() in EXPORT_WORDS)
+            code.strip(_BLANK_OR_NEWLINE).casefold() in EXPORT_WORDS)
 
     def _start_statement(self, number: int) -> None:
         self.stmt_start = len(self.result)
@@ -1068,7 +1080,7 @@ class _LineFormatter:
             return
         lines = self.result[start:]
         if len(lines) == 1:
-            body = self.stmt_code[0].strip(" \t\f")
+            body = self.stmt_code[0].strip(_BLANK)
             width = self.stmt_depth * TAB_WIDTH + len(body.expandtabs(TAB_WIDTH))
             # Предфильтр: нормализация добавляет не больше 2 знаков на
             # оператор и 1 на запятую; схлопывание только сокращает. Рост
@@ -1108,7 +1120,7 @@ class _LineFormatter:
         leading = (self.statement_open and not was_continuation
                    and self.pending_header is None and _starts_continuation(line, code))
         export_tail = (self.declaration_open and not was_continuation
-                       and code.strip(" \t\f\r\n").casefold() in EXPORT_WORDS)
+                       and code.strip(_BLANK_OR_NEWLINE).casefold() in EXPORT_WORDS)
         if leading or export_tail:
             # Продолжение инструкции предыдущей строки.
             self.continuation_depth = self.statement_depth_for_continuation
@@ -1134,7 +1146,7 @@ class _LineFormatter:
         bare_declaration = (
             first_keyword in {"Процедура", "Функция"}
             and not self.brackets
-            and not code[keywords[0][1]:].strip(" \t\f\r\n")[len(keywords[0][0]):]
+            and not code[keywords[0][1]:].strip(_BLANK_OR_NEWLINE)[len(keywords[0][0]):]
         )
         starts_multiline_declaration = (
             first_keyword in {"Процедура", "Функция"}
@@ -1163,7 +1175,7 @@ class _LineFormatter:
             and bool(self.brackets)
             and len(keywords) == 1
             and keywords[0][0] in _BRANCH
-            and not line[:keywords[0][1]].strip(" \t\f")
+            and not line[:keywords[0][1]].strip(_BLANK)
         )
         if starts_branch_call:
             is_continuation = False
@@ -1186,7 +1198,7 @@ class _LineFormatter:
         if starts_branch_call and self.brackets:
             self.continuation_depth = len(self.stack)
         if (not self.brackets and self.pending_header is None
-                and _ends_with_bare_return(code.rstrip(" \t\f\r\n"))):
+                and _ends_with_bare_return(code.rstrip(_BLANK_OR_NEWLINE))):
             self.return_pending = True
 
     def _continuation_line(
@@ -1201,13 +1213,13 @@ class _LineFormatter:
         if was_continuation:
             # Закрывающая скобка на своей строке и текст запроса сразу после
             # «=» — на уровне инструкции (так в типовых и в примере std437).
-            body = line.lstrip(" \t\f")
+            body = line.lstrip(_BLANK)
             same_level = body.startswith(")") or (
                 body.startswith('"') and self.value_expected
             )
             depth = self.continuation_depth + (0 if same_level else 1)
             indented = _continuation_indent(line, depth, self.statement_delta)
-            if same_level and _lead_width(indented) < (depth + 1) * 4:
+            if same_level and _lead_width(indented) < (depth + 1) * TAB_WIDTH:
                 # Для «)» и текста запроса сохраняется только отступ на целый
                 # уровень и глубже; меньший — шум, а не выравнивание.
                 indented = _reindent(line, depth)
@@ -1216,7 +1228,7 @@ class _LineFormatter:
                 # Комментарий над «)» на уровне инструкции относится к
                 # параметрам — на уровень глубже; над «)», выровненной с
                 # параметрами, — на её уровне.
-                self.last_dedent = _lead_width(indented) <= depth * 4
+                self.last_dedent = _lead_width(indented) <= depth * TAB_WIDTH
         else:
             # Первая строка многострочной инструкции — на уровне инструкции.
             self.result.append(_reindent(line, self.continuation_depth))
@@ -1326,7 +1338,7 @@ def _without_stripped_lines(row, stripped: set[int]):
     kept = [
         piece for offset, piece in enumerate(pieces)
         if not (offset and first + offset in stripped
-                and piece.lstrip(" \t\f").startswith("//"))
+                and piece.lstrip(_BLANK).startswith("//"))
     ]
     if len(kept) == len(pieces):
         return row
@@ -1452,7 +1464,7 @@ def _collapse_blank_lines(text: str) -> str:
     kept: list[str] = []
     previous_blank = False
     for number, line in enumerate(lines):
-        blank = number not in interior and not line.strip(" \t\f\r\n")
+        blank = number not in interior and not line.strip(_BLANK_OR_NEWLINE)
         if blank and previous_blank:
             continue
         kept.append(line)
@@ -1471,8 +1483,6 @@ _CODE_AFTER_SEMICOLON = re.compile(r";[ \t\f]*[^\s;]")
 _BREAK_WORD_SEARCH = tuple(
     (word, re.compile(word)) for word in sorted(BREAK_AFTER | BREAK_BEFORE)
 )
-_NEWLINE = re.compile(r"\r\n|\r|\n")
-
 
 _NEXT_CHAR = re.compile(r"[ \t\f]*([^ \t\f])")
 
@@ -1597,13 +1607,13 @@ def _break_lines(source: str, tokens=None):
             continue
         newline_match = _NEWLINE.search(line)
         newline = newline_match.group() if newline_match else default_newline
-        indent = line[:len(line) - len(line.lstrip(" \t\f"))]
+        indent = line[:len(line) - len(line.lstrip(_BLANK))]
         pieces = []
         start = 0
         for point in points:
-            pieces.append(line[start:point].rstrip(" \t\f"))
+            pieces.append(line[start:point].rstrip(_BLANK))
             start = point
-            while start < len(line) and line[start] in " \t\f":
+            while start < len(line) and line[start] in _BLANK:
                 start += 1
         pieces.append(line[start:])
         # Соседние точки («;» и КонецЕсли за ней) дают пустой кусок.

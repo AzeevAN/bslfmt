@@ -183,6 +183,17 @@ class WrapTests(unittest.TestCase):
         self.assertEqual(wrap_statement(code, 1, lambda text: _normalize_spacing(text).lower()),
                          expected)
 
+    def test_slow_path_matches_slices_for_leading_operators(self):
+        # Ведущий «И» без пробела у автора («И(») — без пробела и в медленном
+        # пути; ведущий «+» — с пробелом в обоих.
+        long = "ОченьДлинноеУсловиеНомер"
+        code = (f"Результат = {long}1 И({long}2 Или {long}3) И {long}4 "
+                f"+{long}5 И {long}6;")
+        fast = wrap(code)
+        self.assertIn(f"\t\tИ({long}2 Или {long}3)", fast)
+        slow = wrap_statement(code, 1, lambda text: _normalize_spacing(text).lower())
+        self.assertEqual(slow, [line.lower() for line in fast])
+
     def test_author_spaces_inside_line_are_kept(self):
         # Внутри строки автора пробел — как у автора (нормализация решает
         # остальное); каноническое правило — только на стыке бывших строк.

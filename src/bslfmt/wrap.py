@@ -9,6 +9,7 @@ None — «оставить как было». Меняются только п�
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 
 from .keywords import (
     AND_WORDS,
@@ -37,7 +38,6 @@ _UNIT = re.compile(
 )
 # Места разреза шага 1 по порядку приоритета.
 _SPLIT_LEVELS = (OR_WORDS, AND_WORDS, frozenset({"+"}))
-_LEAD_OPERATORS = OR_WORDS | AND_WORDS
 _NO_OPERATOR_SPLIT = frozenset({"для", "for"})
 
 
@@ -162,15 +162,17 @@ def _needs_space(units: _Units, left: int, right: int) -> bool:
     return False
 
 
-def _render(units: _Units, start: int, stop: int, normalize) -> str:
+Normalize = Callable[[str], str]
+
+
+def _render(units: _Units, start: int, stop: int, normalize: Normalize) -> str:
     """Каноническая строка из единиц [start, stop)."""
     pieces = [units.texts[start]]
-    # Пробел после ведущего оператора нужен только для операторов-разрезов
-    # шага 1 (+, И/Или/AND/OR). Унарные - и другие операторы пробел не получают.
-    lead_operator = (
-        (units.kinds[start] == "op" and units.texts[start] == "+") or
-        (units.kinds[start] == "word" and units.folded[start] in _LEAD_OPERATORS)
-    )
+    # «+» в начале части — бинарный (разрез шага 1), но отдельно нормализация
+    # сочла бы его унарным: пробел после него ставим сами, как в целой
+    # инструкции. После И/Или пробел решают пробелы автора и _needs_space —
+    # так же, как в целой инструкции.
+    lead_operator = units.kinds[start] == "op" and units.texts[start] == "+"
     gaps = units.gaps
     for index in range(start + 1, stop):
         # Внутри строки автора — его пробел (дальше решает нормализация, как
@@ -188,7 +190,7 @@ def _width(depth: int, text: str) -> int:
 
 
 class _Layout:
-    def __init__(self, units: _Units, normalize) -> None:
+    def __init__(self, units: _Units, normalize: Normalize) -> None:
         self.units = units
         self.normalize = normalize
         # Скорость: инструкция нормализуется один раз, части — срезы этой
@@ -329,18 +331,15 @@ class _Layout:
 
     def line_parts(self, start: int, stop: int, content):
         """Строка параметров → (начало непустой части, её конец, хвост)."""
-        if content is None:
+        a, b = content if content is not None else (start, start)
+        if content is None or a > start:
+            # Без непустой части или с пустыми в начале («, А») — одна
+            # строка без отдельной рекурсии.
             return start, start, self.render(start, stop)
-        a, b = content
-        prefix = self.render(start, a) + " " if a > start else ""
-        suffix = self.render(b, stop) if stop > b else ""
-        if prefix:
-            # Пустые в начале: «, А» — одна строка без отдельной рекурсии.
-            return start, start, self.render(start, stop)
-        return a, b, suffix
+        return a, b, self.render(b, stop) if stop > b else ""
 
 
-def wrap_statement(code: str, depth: int, normalize) -> list[str] | None:
+def wrap_statement(code: str, depth: int, normalize: Normalize) -> list[str] | None:
     """Разложить инструкцию: строки с отступом табами или None — как было.
 
     code — код инструкции без комментария в конце (переносы и пробелы
