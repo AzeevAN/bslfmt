@@ -1546,6 +1546,10 @@ def _break_candidates(masked: str) -> list[int]:
     # знака: заменяем его буквой, чтобы позиции совпадали. Граница слова не
     # меняется, а ключевым словом «İ» не считается нигде в форматтере.
     lower = masked.replace("\u0130", "x").lower()
+    # \u041d\u0430\u0447\u0430\u043b\u0430 \u0441\u0442\u0440\u043e\u043a \u0438 \u043f\u0435\u0440\u0432\u044b\u0439 \u043d\u0435\u043f\u0440\u043e\u0431\u0435\u043b\u044c\u043d\u044b\u0439 \u0437\u043d\u0430\u043a \u0441\u0442\u0440\u043e\u043a\u0438 \u0441\u0447\u0438\u0442\u0430\u044e\u0442\u0441\u044f \u043e\u0434\u0438\u043d \u0440\u0430\u0437:
+    # \u043f\u043e\u0438\u0441\u043a \u043d\u0430\u0437\u0430\u0434 \u043e\u0442 \u043a\u0430\u0436\u0434\u043e\u0433\u043e \u0441\u043b\u043e\u0432\u0430 \u0431\u044b\u043b \u043a\u0432\u0430\u0434\u0440\u0430\u0442\u0438\u0447\u043d\u044b\u043c \u043d\u0430 \u0434\u043b\u0438\u043d\u043d\u043e\u0439 \u0441\u0442\u0440\u043e\u043a\u0435.
+    line_starts: list[int] | None = None
+    first_code: dict[int, int] = {}
     for word, search in _BREAK_WORD_SEARCH:
         for match in search.finditer(lower):
             start, end = match.span()
@@ -1559,7 +1563,14 @@ def _break_candidates(masked: str) -> list[int]:
                     positions.append(start)
                     continue
             if word in _BREAK_BEFORE:
-                if lower[_line_start(lower, start):start].strip(" \t\f"):
+                if line_starts is None:
+                    line_starts = [0]
+                    line_starts.extend(match.end() for match in _NEWLINE.finditer(lower))
+                line = bisect_right(line_starts, start) - 1
+                if line not in first_code:
+                    # Строка непуста: в ней есть хотя бы само слово.
+                    first_code[line] = _NEXT_CHAR.match(lower, line_starts[line]).start(1)
+                if first_code[line] < start:
                     positions.append(start)
     positions.sort()
     return positions

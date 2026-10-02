@@ -660,6 +660,23 @@ class FormatterTests(unittest.TestCase):
                 format_code(source)
                 self.assertLess(time.perf_counter() - started, 10)
 
+    def test_block_words_on_one_long_line_are_linear(self):
+        # Поиск начала строки назад для каждого «КонецЕсли» давал квадратичное
+        # время: строка в 40 000 слов — 5 с. Сравниваем рост, а не абсолютное
+        # время: вход ×4 — время меньше ×8 (квадратичное дало бы ×16).
+        def elapsed(count: int) -> float:
+            source = "КонецЕсли " * count
+            best = float("inf")
+            for _ in range(3):
+                started = time.perf_counter()
+                with self.assertRaises(FormatError):
+                    format_code(source)
+                best = min(best, time.perf_counter() - started)
+            return best
+
+        small, large = elapsed(5_000), elapsed(20_000)
+        self.assertLess(large, small * 8)
+
     def test_unary_minus_after_keywords_that_start_expressions(self):
         cases = (
             ("Return -X;\n", "Return -X;\n"),
