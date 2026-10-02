@@ -63,4 +63,12 @@ def _is_name_after(text: str, start: int) -> bool:
     position = start
     while position and text[position - 1] not in "\r\n" and text[position - 1].isspace():
         position -= 1
-    return bool(position) and text[position - 1] in ".~"
+    if not position or text[position - 1] not in ".~":
+        return False
+    if text[position - 1] == "~":
+        return True
+    # «1.» — точка числа, а не доступ к свойству; «Объект1.» — доступ.
+    digits = position - 1
+    while digits and text[digits - 1].isdigit():
+        digits -= 1
+    return digits == position - 1 or (digits > 0 and _is_word_char(text[digits - 1]))

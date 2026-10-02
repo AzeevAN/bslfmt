@@ -125,6 +125,11 @@ class FormatterTests(FormatAssertions, unittest.TestCase):
     def test_word_after_dot_and_spaces_is_property(self):
         # Пробел, NBSP или \u2028 между «.» и словом: слово — свойство, не
         # ключевое слово, и регистр у него авторский.
+        # Точка после числа («1.») — часть числа, а не доступ к свойству.
+        self.assertFormats("Если А > 1. Тогда\nБ = 2;\nКонецЕсли;\n",
+                           "Если А > 1. Тогда\n\tБ = 2;\nКонецЕсли;\n")
+        self.assertFormats("Если А > 1.5 Тогда\nБ = 2;\nКонецЕсли;\n",
+                           "Если А > 1.5 Тогда\n\tБ = 2;\nКонецЕсли;\n")
         for gap in (" ", "\xa0", "\u2028", "\x85"):
             with self.subTest(gap=repr(gap)):
                 self.assertFormats(f"А = Объект.{gap}если;\nБ = 1;\n",
