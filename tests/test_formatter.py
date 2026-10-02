@@ -59,6 +59,30 @@ class FormatterTests(unittest.TestCase):
         self.assertEqual(format_code("Процедура П()\nА = Б.Or\nВ();\nКонецПроцедуры\n"),
                          "Процедура П()\n\tА = Б.Or\n\tВ();\nКонецПроцедуры\n")
 
+    def test_new_and_declaration_word_at_line_end_continue(self):
+        # После «Новый» и «Процедура»/«Функция» инструкция не кончается: имя
+        # типа или метода — на следующей строке.
+        cases = (
+            ("Процедура П()\nА = Новый\nСтруктура;\nКонецПроцедуры\n",
+             "Процедура П()\n\tА = Новый Структура;\nКонецПроцедуры\n"),
+            ("Procedure P()\nA = New\nStructure;\nEndProcedure\n",
+             "Procedure P()\n\tA = New Structure;\nEndProcedure\n"),
+            ("Процедура\nП()\nКонецПроцедуры\n", "Процедура П()\nКонецПроцедуры\n"),
+            ("&НаСервере\nФункция\nФ(А)\nЭкспорт\nВозврат А;\nКонецФункции\n",
+             "&НаСервере\nФункция Ф(А) Экспорт\n\tВозврат А;\nКонецФункции\n"),
+            ("Асинх Процедура\nП()\nКонецПроцедуры\n", "Асинх Процедура П()\nКонецПроцедуры\n"),
+            ("Асинх Процедура П(А,\nБ)\nКонецПроцедуры\n",
+             "Асинх Процедура П(А, Б)\nКонецПроцедуры\n"),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(format_code(source), expected)
+                self.assertEqual(format_code(expected), expected)
+        # Свойство с именем «Новый» после «.» — не ключевое слово.
+        self.assertEqual(
+            format_code("Процедура П()\nА = Б.Новый\nВ();\nКонецПроцедуры\n"),
+            "Процедура П()\n\tА = Б.Новый\n\tВ();\nКонецПроцедуры\n")
+
     def test_statement_after_semicolon_or_block_word_is_not_continuation(self):
         source = "Процедура П()\nЕсли А Тогда\nБ = 1;\nИначе\nВ = 2;\nКонецЕсли;\nКонецПроцедуры\n"
         expected = ("Процедура П()\n\tЕсли А Тогда\n\t\tБ = 1;\n\tИначе\n\t\tВ = 2;\n"

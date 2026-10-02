@@ -447,10 +447,11 @@ def _format_active_code(
         raise
 
 
-# Знак или логический оператор в конце строки: выражение продолжается на
-# следующей. Слово после «.» — имя свойства (Объект.Или), не оператор.
+# Знак, логический оператор или «Новый» в конце строки: выражение
+# продолжается на следующей. Слово после «.» — имя свойства (Объект.Или), не
+# оператор.
 _TRAILING_OPERATOR = re.compile(
-    r"(?:[+*/%=<>,.-]|(?<!\.)\b(?:И|ИЛИ|НЕ|AND|OR|NOT)\b)\s*$", re.IGNORECASE)
+    r"(?:[+*/%=<>,.-]|(?<!\.)\b(?:И|ИЛИ|НЕ|AND|OR|NOT|НОВЫЙ|NEW)\b)\s*$", re.IGNORECASE)
 
 
 def _ends_with_block_word(code_tail: str) -> bool:
@@ -901,7 +902,7 @@ class _LineFormatter:
         )
         if declaration_line or self.in_declaration:
             self.declaration_open = self.statement_open and not self.brackets
-            self.in_declaration = bool(self.brackets)
+            self.in_declaration = bool(self.brackets) or self.operator_continuation
         else:
             self.declaration_open = False
             self.in_declaration = False
@@ -1169,11 +1170,17 @@ class _LineFormatter:
             first_keyword in {"Для", "Пока"}
             and not _has_loop_terminator(code)
         )
+        # «Процедура» в конце строки: имя метода — на следующей строке.
+        bare_declaration = (
+            first_keyword in {"Процедура", "Функция"}
+            and not self.brackets
+            and not code[keywords[0][1]:].strip(" \t\f\r\n")[len(keywords[0][0]):]
+        )
         starts_multiline_declaration = (
             first_keyword in {"Процедура", "Функция"}
             and len(keywords) == 1
             and not was_continuation
-            and bool(self.brackets)
+            and (bool(self.brackets) or bare_declaration)
         )
         trailing_operator = _TRAILING_OPERATOR.search(code)
         if starts_multiline_condition or starts_multiline_loop:
@@ -1214,6 +1221,7 @@ class _LineFormatter:
 
         if starts_multiline_declaration:
             self.continuation_depth = depth
+            self.operator_continuation = bare_declaration
         self._apply_keywords(code, keywords, depth, number)
         if starts_branch_call and self.brackets:
             self.continuation_depth = len(self.stack)

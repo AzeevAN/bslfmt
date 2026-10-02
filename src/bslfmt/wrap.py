@@ -42,6 +42,7 @@ _EXPRESSION_STARTERS = frozenset({
 _SPLIT_LEVELS = (frozenset({"или", "or"}), frozenset({"и", "and"}), frozenset({"+"}))
 _NO_OPERATOR_SPLIT = frozenset({"для", "for"})
 _DECLARATIONS = frozenset({"процедура", "функция", "procedure", "function"})
+_ASYNC = frozenset({"асинх", "async"})
 # Структурные слова внутри инструкции: при сомнении — не трогаем.
 _STRUCTURAL_INSIDE = frozenset({
     "конецесли", "endif", "конеццикла", "enddo", "конецпопытки", "endtry",
@@ -127,6 +128,8 @@ def _units(code: str) -> _Units | None:
     if not units.valid:
         return None
     units.gaps = gaps
+    # «Асинх Процедура …» — объявление, слово объявления не внутри инструкции.
+    declaration = 1 if units.folded[0] in _ASYNC and len(texts) > 1 else 0
     for index in range(1, len(texts)):
         # Подряд идущие литералы — многострочная строка (справка 1С,
         # «Строка»): переносы между ними не трогаем.
@@ -136,9 +139,10 @@ def _units(code: str) -> _Units | None:
         if texts[index] == "/" and texts[index - 1] == "/":
             return None
         if (kinds[index] == "word" and texts[index - 1] != "."
-                and units.folded[index] in _STRUCTURAL_INSIDE):
+                and units.folded[index] in _STRUCTURAL_INSIDE
+                and not (index == declaration and units.folded[index] in _DECLARATIONS)):
             return None
-    if units.folded[0] in _DECLARATIONS and ";" in texts:
+    if units.folded[declaration] in _DECLARATIONS and ";" in texts:
         # «Процедура П() А = 1;» — объявление с инструкцией в строке.
         return None
     return units
