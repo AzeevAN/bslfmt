@@ -42,7 +42,10 @@ DEFAULT_MAX_CHARS = 20_000_000
 DEFAULT_MAX_DEPTH = 100
 
 
-_IDENTIFIER = re.compile(r"[A-Za-zА-Яа-яЁё_][A-Za-zА-Яа-яЁё0-9_]*")
+# Слово — буквы любого алфавита, цифры и «_» (не с цифры): так же граница
+# слова считается во всех проходах (str.isalnum() или «_»). Иначе слово
+# внутри «ЦиклІнтервал» находилось одним проходом и не находилось другим.
+_IDENTIFIER = re.compile(r"[^\W\d]\w*")
 # Поля кортежа токена (TokenRow): порядок полей Token.
 _KIND, _TEXT, _START, _END, _LINE = range(5)
 _NOT_NEWLINE = re.compile(r"[^\r\n]")
@@ -219,7 +222,7 @@ def _ends_operand(token) -> bool:
     tail = text[-64:]
     if re.search(r"(?:\d+(?:[.,]\d*)?|[.,]\d+)[EeЕе]$", tail):
         return False
-    last_word = re.search(r"[А-Яа-яЁёA-Za-z_]+$", tail)
+    last_word = re.search(r"\w+$", tail)
     if last_word and last_word.group().casefold() in _EXPRESSION_STARTERS:
         return False
     return text[-1].isalnum() or text[-1] in "_)]}"
@@ -455,8 +458,9 @@ def _ends_with_block_word(code_tail: str) -> bool:
     word = last_word[-1]
     if word.casefold() not in _BLOCK_END_WORDS or not code_tail.endswith(word):
         return False
+    # Цифра перед словом («1КонецЕсли») — часть другого слова.
     before = code_tail[-len(word) - 1:-len(word)]
-    return before != "."
+    return not before or not (_is_word_char(before) or before == ".")
 
 
 def _ends_with_bare_return(code_tail: str) -> bool:

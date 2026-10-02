@@ -80,6 +80,30 @@ class FormatterTests(unittest.TestCase):
                             formatter._significant_units(formatter._token_rows(text))]
                 self.assertEqual(units(case["input"]), units(actual))
 
+    def test_identifiers_with_letters_outside_russian_alphabet(self):
+        # Буквы «і», «ї», казахские «Қ», «Ү» — часть идентификатора: слово
+        # внутри него («Цикл» в «ЦиклІнтервал») не структурное и не место
+        # переноса.
+        cases = (
+            ("Х = ЦиклІнтервал; У = 1;\n", "Х = ЦиклІнтервал;\nУ = 1;\n"),
+            ("Х = КонецЕслиІ; У = 1;\n", "Х = КонецЕслиІ;\nУ = 1;\n"),
+            ("Х = КонецЕслиҚ;\n", "Х = КонецЕслиҚ;\n"),
+            ("Если ЄТогдаҮ Тогда\nА = 1;\nКонецЕсли;\n",
+             "Если ЄТогдаҮ Тогда\n\tА = 1;\nКонецЕсли;\n"),
+            ("Х = ЇНе-1;\n", "Х = ЇНе - 1;\n"),
+        )
+        for source, expected in cases:
+            with self.subTest(source=source):
+                self.assertEqual(format_code(source), expected)
+                self.assertEqual(format_code(expected), expected)
+
+    def test_long_statement_with_kazakh_identifiers_is_wrapped(self):
+        parts = " + ".join(f"ПеременнаяҚ{number}" for number in range(12))
+        source = f"Процедура П()\nҚ = {parts};\nКонецПроцедуры\n"
+        result = format_code(source)
+        self.assertIn("\n\t\t+ ПеременнаяҚ1\n", result)
+        self.assertEqual(format_code(result), result)
+
     def test_invalid_structure_fails_closed(self):
         for source in (
             "КонецЕсли;\n",
