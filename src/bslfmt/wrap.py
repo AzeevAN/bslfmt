@@ -339,6 +339,25 @@ class _Layout:
         return a, b, self.render(b, stop) if stop > b else ""
 
 
+def may_need_wrap(line: str, depth: int) -> bool:
+    """Может ли однострочная инструкция после нормализации не влезть в ширину.
+
+    Быстрая оценка без разбора: нормализация пробелов добавляет не больше
+    2 знаков на оператор и 1 на запятую, схлопывание только сокращает. Рост
+    не больше двух длин строки — короткую строку не считаем. «;» внутри
+    строки не учтён: безопасно, перенос строк раньше делит инструкции по «;».
+    Меняется правило пробелов — меняется и эта оценка.
+    """
+    body = line.strip(" \t\f")
+    width = _width(depth, body)
+    if width + 2 * len(body) <= LINE_WIDTH:
+        return False
+    if width > LINE_WIDTH:
+        return True
+    growth = 2 * sum(body.count(sign) for sign in "+-*/%=<>") + body.count(",")
+    return width + growth > LINE_WIDTH
+
+
 def wrap_statement(code: str, depth: int, normalize: Normalize) -> list[str] | None:
     """Разложить инструкцию: строки с отступом табами или None — как было.
 

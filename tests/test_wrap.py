@@ -2,7 +2,7 @@ import time
 import unittest
 
 from bslfmt.formatter import _normalize_spacing
-from bslfmt.wrap import LINE_WIDTH, wrap_statement
+from bslfmt.wrap import LINE_WIDTH, may_need_wrap, wrap_statement
 
 
 def wrap(code, depth=1):
@@ -88,6 +88,17 @@ class WrapTests(unittest.TestCase):
         self.assertTrue(all(len(line.expandtabs(4)) <= LINE_WIDTH for line in result), result)
         self.assertIn("\t\t\tИли " + "В" * 54 + ",", result)
         self.assertEqual(wrap("\n".join(result)), result)
+
+    def test_may_need_wrap_bounds_normalized_width(self):
+        # Строка, которая влезает только без пробелов вокруг знаков, —
+        # кандидат; короткая — нет.
+        tight = "А=" + "+".join(["Б"] * 50) + ";"
+        self.assertLessEqual(len(tight) + 4, LINE_WIDTH)
+        self.assertGreater(len(_normalize_spacing(tight)) + 4, LINE_WIDTH)
+        self.assertTrue(may_need_wrap(tight, 1))
+        self.assertFalse(may_need_wrap("А = Б + В;", 1))
+        self.assertFalse(may_need_wrap("Ж" * 120, 0))
+        self.assertTrue(may_need_wrap("Ж" * 121, 0))
 
     def test_skipped_parameters(self):
         self.assertWrap(

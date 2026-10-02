@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 
 from .lexer import (
     _NEWLINE,
+    _lex_rows,
     _PATCH_CLOSE,
     _PATCH_OPEN,
     _active_source,
@@ -17,7 +18,6 @@ from .lexer import (
     LexerError,
     _split_lines,
     _token_rows,
-    lex,
 )
 from .keywords import (
     BLOCK_END_WORDS,
@@ -35,7 +35,7 @@ from .keywords import (
     TRAILING_WORDS,
     canonical_case,
 )
-from .wrap import LINE_WIDTH, TAB_WIDTH, wrap_statement
+from .wrap import TAB_WIDTH, may_need_wrap, wrap_statement
 
 
 class FormatError(ValueError):
@@ -155,10 +155,12 @@ def _masked_code(
         else:
             parts.append(token[_TEXT])
 
+    opaque_lines: set[int] = set()
+    if not opaque_ranges:
+        return "".join(parts), strings, literal_starts, opaque_lines
     line_starts = [0]
     for line in _split_lines(source):
         line_starts.append(line_starts[-1] + len(line))
-    opaque_lines: set[int] = set()
     for start, end in opaque_ranges:
         first_line = bisect_right(line_starts, start) - 1
         last_line = bisect_right(line_starts, max(start, end - 1)) - 1
@@ -282,8 +284,21 @@ def _normalize_spacing(source: str, collapse_blank_lines: bool = False) -> str:
     строки подряд (см. _collapse_blank_lines): литералы и области правки —
     цельные токены, пустые строки внутри них не задеваются.
     """
-    tokens = _token_rows(source)
-    directive_lines = _directive_line_starts(source)
+    return _normalize_rows(
+        _token_rows(source), _directive_line_starts(source), collapse_blank_lines)
+
+
+def _normalize_statement(code: str) -> str:
+    """_normalize_spacing для кода одной инструкции из раскладки.
+
+    В инструкции нет директив и областей правки (раскладка их не берёт),
+    поэтому их поиск пропускается.
+    """
+    return _normalize_rows(_lex_rows(code), frozenset(), False)
+
+
+def _normalize_rows(tokens, directive_lines, collapse_blank_lines: bool) -> str:
+    """Ядро _normalize_spacing: токены и начала строк директив уже готовы."""
     line_starts, indented = _line_context(tokens)
     last = len(tokens) - 1
     output: list[str] = []
@@ -385,13 +400,15 @@ def _header_terminator_end(header_kind: str, code: str) -> int | None:
     return None
 
 
+_BRACKET_PAIRS = {")": "(", "]": "["}
+
+
 def _scan_brackets(code: str, brackets: list[str]) -> None:
-    pairs = {")": "(", "]": "["}
     for char in code:
         if char in "([":
             brackets.append(char)
         elif char in ")]":
-            if not brackets or brackets.pop() != pairs[char]:
+            if not brackets or brackets.pop() != _BRACKET_PAIRS[char]:
                 raise FormatError("несогласованные скобки")
 
 
@@ -422,12 +439,29 @@ def _format_active_code(
         raise
 
 
-# Знак, логический оператор или «Новый» в конце строки: выражение
-# продолжается на следующей. Слово после «.» — имя свойства (Объект.Или), не
-# оператор.
-_TRAILING_OPERATOR = re.compile(
-    r"(?:[+*/%=<>,.-]|(?<!\.)\b(?:" + "|".join(sorted(TRAILING_WORDS)) + r")\b)\s*$",
-    re.IGNORECASE)
+_TRAILING_SIGNS = frozenset("+*/%=<>,.-")
+
+
+def _trailing_operator_start(code: str, start: int = 0) -> int | None:
+    """Начало знака, логического оператора или «Новый» в конце code[start:].
+
+    После них выражение продолжается на следующей строке. Слово после «.» —
+    имя свойства (Объект.Или), не оператор. Смотрится только хвост строки:
+    поиск регулярным выражением с «$» проходил всю строку.
+    """
+    end = len(code.rstrip())
+    if end <= start:
+        return None
+    if code[end - 1] in _TRAILING_SIGNS:
+        return end - 1
+    word_start = end
+    while word_start > start and _is_word_char(code[word_start - 1]):
+        word_start -= 1
+    if word_start == end or code[word_start:end].casefold() not in TRAILING_WORDS:
+        return None
+    if word_start > start and code[word_start - 1] == ".":
+        return None
+    return word_start
 
 
 def _ends_with_block_word(code_tail: str) -> bool:
@@ -548,6 +582,11 @@ def _lead_width(line: str) -> int:
     return width
 
 
+def _not_deeper(line: str, depth: int) -> bool:
+    """Отступ строки не глубже depth уровней."""
+    return _lead_width(line) <= depth * TAB_WIDTH
+
+
 def _shift_lead(line: str, delta: int) -> str:
     """Сдвинуть ведущий отступ на delta колонок, сохранив его вид.
 
@@ -665,22 +704,19 @@ class _LineFormatter:
         for number, (line, code) in enumerate(zip(self.lines, self.code_lines)):
             self.cursor.line = number + 1
             inside_string = self._advance(line)
+            # Строки, которые не входят ни в одну инструкцию: правка, директивы.
+            special = (number in self.opaque_lines or number in region_lines
+                       or number in conditional_lines)
             if number in self.opaque_lines:
                 self._statement_break()
-                self.return_pending = False
-                self.pending_comments.clear()
+                self._reset_line_state()
                 self.result.append(line)
             elif inside_string:
-                self.return_pending = False
-                self.pending_comments.clear()
-                if (self.stripped is not None and self._inside_method()
-                        and line.lstrip(_BLANK).startswith("//")):
+                self._reset_line_state()
+                if line.lstrip(_BLANK).startswith("//") and self._strip_comment_line(number, line):
                     # Строка-комментарий BSL между строками литерала (лексер
                     # не считает её текстом строки): в значение не входит.
                     # Литерал на ней не кончается, состояние учтёт следующая.
-                    self.stripped.add(number + 1)
-                    if self.keep_line_count:
-                        self.result.append(line)
                     continue
                 # Многострочный литерал: инструкцию не раскладываем.
                 if self.stmt_start is None:
@@ -698,11 +734,8 @@ class _LineFormatter:
                 # следующей строки кода (std456 п.7.3). Комментарий в колонке 0
                 # остаётся там: маркеры доработок (//!, //++, //{{) и код,
                 # закомментированный конфигуратором (Ctrl+/).
-                if self.stripped is not None and self._inside_method():
+                if self._strip_comment_line(number, line):
                     # Удаляемая строка-комментарий раскладке не мешает.
-                    self.stripped.add(number + 1)
-                    if self.keep_line_count:
-                        self.result.append(line)
                     continue
                 self._statement_break()
                 if not line.startswith("//"):
@@ -710,8 +743,7 @@ class _LineFormatter:
                 self.result.append(line)
             elif number in region_lines:
                 self._statement_break()
-                self.return_pending = False
-                self.pending_comments.clear()
+                self._reset_line_state()
                 self._region_line(line)
             elif number in conditional_lines:
                 self._statement_break()
@@ -738,14 +770,12 @@ class _LineFormatter:
                 self._note_statement_code(line, code)
             if not inside_string:
                 self.literal_delta = _lead_width(self.result[-1]) - _lead_width(line)
-            if (number not in region_lines and number not in conditional_lines
-                    and number not in self.opaque_lines):
+            if not special:
                 self._note_line_end(line, code, inside_string)
                 if inside_string or (line.strip(_BLANK_OR_NEWLINE)
                                      and not line.lstrip(_BLANK).startswith("//")):
                     self._note_statement_end(code, number, inside_string)
-            elif number in region_lines or number in conditional_lines or (
-                    number in self.opaque_lines):
+            else:
                 self.statement_open = False
                 self.declaration_open = False
                 self.in_declaration = False
@@ -754,6 +784,29 @@ class _LineFormatter:
                 self._finish_statement()
         self._finish()
         return _normalize_spacing("".join(self.result), collapse_blank_lines)
+
+    def _reset_line_state(self) -> None:
+        """Строка обрывает ожидание значения Возврат и ждущие комментарии."""
+        self.return_pending = False
+        self.pending_comments.clear()
+
+    def _strip_comment_line(self, number: int, line: str) -> bool:
+        """Удалить строку-комментарий (-sbc) внутри метода; True — удалена.
+
+        В режиме областей правки строка остаётся до сборки: число строк
+        меняется только там.
+        """
+        if self.stripped is None or not self._inside_method():
+            return False
+        self.stripped.add(number + 1)
+        if self.keep_line_count:
+            self.result.append(line)
+        return True
+
+    def _is_export_tail(self, code: str) -> bool:
+        """Строка из одного «Экспорт» после объявления без «;»."""
+        return self.declaration_open and (
+            code.strip(_BLANK_OR_NEWLINE).casefold() in EXPORT_WORDS)
 
     def _inside_method(self) -> bool:
         return bool(self.stack) and self.stack[0].opener in {"Процедура", "Функция"}
@@ -893,12 +946,7 @@ class _LineFormatter:
                 "структурный код после многострочной строки не поддерживается"
             )
         _scan_brackets(suffix, self.brackets)
-        trailing_operator = _TRAILING_OPERATOR.search(suffix)
-        string_follows = False
-        if trailing_operator:
-            operator_position = line_start + suffix_start + trailing_operator.start()
-            string_follows = self._literal_starts_between(operator_position, self.offset)
-        self.operator_continuation = bool(trailing_operator) and not string_follows
+        self.operator_continuation = self._ends_with_operator(line, code, suffix_start)
         if self.brackets or self.operator_continuation:
             if self.continuation_depth is None:
                 self.continuation_depth = len(self.stack)
@@ -987,7 +1035,7 @@ class _LineFormatter:
         ))
         if same_level:
             # Как в _continuation_line: +1 только над «)» на уровне заголовка.
-            self.last_dedent = _lead_width(self.result[-1]) <= header_depth * TAB_WIDTH
+            self.last_dedent = _not_deeper(self.result[-1], header_depth)
         if terminator_end is not None:
             self._complete_pending_header(header_kind)
             self.pending_header = None
@@ -1039,8 +1087,7 @@ class _LineFormatter:
             return True
         if self.statement_open and _starts_continuation(line, code):
             return True
-        return self.declaration_open and (
-            code.strip(_BLANK_OR_NEWLINE).casefold() in EXPORT_WORDS)
+        return self._is_export_tail(code)
 
     def _start_statement(self, number: int) -> None:
         self.stmt_start = len(self.result)
@@ -1079,21 +1126,9 @@ class _LineFormatter:
         if start is None or self.stmt_blocked or not self.stmt_code:
             return
         lines = self.result[start:]
-        if len(lines) == 1:
-            body = self.stmt_code[0].strip(_BLANK)
-            width = self.stmt_depth * TAB_WIDTH + len(body.expandtabs(TAB_WIDTH))
-            # Предфильтр: нормализация добавляет не больше 2 знаков на
-            # оператор и 1 на запятую; схлопывание только сокращает. Рост
-            # не больше двух длин строки — короткую строку не считаем.
-            # «;» внутри строки в оценке не учтён: безопасно, _break_lines
-            # раньше делит инструкции по «;».
-            if width + 2 * len(body) <= LINE_WIDTH:
-                return
-            if width <= LINE_WIDTH:
-                growth = 2 * sum(body.count(sign) for sign in "+-*/%=<>") + body.count(",")
-                if width + growth <= LINE_WIDTH:
-                    return
-        wrapped = wrap_statement("\n".join(self.stmt_code), self.stmt_depth, _normalize_spacing)
+        if len(lines) == 1 and not may_need_wrap(self.stmt_code[0], self.stmt_depth):
+            return
+        wrapped = wrap_statement("\n".join(self.stmt_code), self.stmt_depth, _normalize_statement)
         if wrapped is None or (len(lines) == 1 and len(wrapped) == 1):
             return
         last = lines[-1]
@@ -1119,19 +1154,14 @@ class _LineFormatter:
             was_continuation = True
         leading = (self.statement_open and not was_continuation
                    and self.pending_header is None and _starts_continuation(line, code))
-        export_tail = (self.declaration_open and not was_continuation
-                       and code.strip(_BLANK_OR_NEWLINE).casefold() in EXPORT_WORDS)
+        export_tail = not was_continuation and self._is_export_tail(code)
         if leading or export_tail:
             # Продолжение инструкции предыдущей строки.
             self.continuation_depth = self.statement_depth_for_continuation
             # Строка не выровнена по операнду первой строки: сдвиг её отступа
             # не переносится.
             self.statement_delta = 0
-            trailing_operator = _TRAILING_OPERATOR.search(code)
-            if trailing_operator and self._literal_starts_between(
-                    self.offset - len(line) + trailing_operator.start(), self.offset):
-                trailing_operator = None
-            self._continuation_line(line, keywords, True, trailing_operator)
+            self._continuation_line(line, keywords, True, self._ends_with_operator(line, code))
             return
         first_keyword = keywords[0][0] if keywords else ""
         starts_multiline_condition = (
@@ -1146,7 +1176,8 @@ class _LineFormatter:
         bare_declaration = (
             first_keyword in {"Процедура", "Функция"}
             and not self.brackets
-            and not code[keywords[0][1]:].strip(_BLANK_OR_NEWLINE)[len(keywords[0][0]):]
+            and _IDENTIFIER.match(code, keywords[0][1]).end()
+            == len(code.rstrip(_BLANK_OR_NEWLINE))
         )
         starts_multiline_declaration = (
             first_keyword in {"Процедура", "Функция"}
@@ -1154,15 +1185,8 @@ class _LineFormatter:
             and not was_continuation
             and (bool(self.brackets) or bare_declaration)
         )
-        trailing_operator = _TRAILING_OPERATOR.search(code)
-        if starts_multiline_condition or starts_multiline_loop:
-            trailing_operator = None
-        if trailing_operator:
-            line_start = self.offset - len(line)
-            if self._literal_starts_between(
-                line_start + trailing_operator.start(), self.offset
-            ):
-                trailing_operator = None
+        trailing_operator = not (starts_multiline_condition or starts_multiline_loop) and (
+            self._ends_with_operator(line, code))
         is_continuation = (
             was_continuation or bool(self.brackets) or bool(trailing_operator)
         ) and not (
@@ -1201,8 +1225,18 @@ class _LineFormatter:
                 and _ends_with_bare_return(code.rstrip(_BLANK_OR_NEWLINE))):
             self.return_pending = True
 
+    def _ends_with_operator(self, line: str, code: str, start: int = 0) -> bool:
+        """Кончается ли код строки (с позиции start) оператором продолжения.
+
+        В маске литерал — пробелы: если после найденного знака начинается
+        литерал (`А = Б + "x"`), знак не последний и продолжения нет.
+        """
+        position = _trailing_operator_start(code, start)
+        return position is not None and not self._literal_starts_between(
+            self.offset - len(line) + position, self.offset)
+
     def _continuation_line(
-        self, line: str, keywords, was_continuation: bool, trailing_operator
+        self, line: str, keywords, was_continuation: bool, trailing_operator: bool
     ) -> None:
         if keywords:
             raise FormatError("структурное слово внутри продолжения выражения")
@@ -1228,13 +1262,13 @@ class _LineFormatter:
                 # Комментарий над «)» на уровне инструкции относится к
                 # параметрам — на уровень глубже; над «)», выровненной с
                 # параметрами, — на её уровне.
-                self.last_dedent = _lead_width(indented) <= depth * TAB_WIDTH
+                self.last_dedent = _not_deeper(indented, depth)
         else:
             # Первая строка многострочной инструкции — на уровне инструкции.
             self.result.append(_reindent(line, self.continuation_depth))
             self.statement_depth_for_continuation = self.continuation_depth
             self.statement_delta = _lead_width(self.result[-1]) - _lead_width(line)
-        self.operator_continuation = bool(trailing_operator) and not self.brackets
+        self.operator_continuation = trailing_operator and not self.brackets
         if not self.brackets and not self.operator_continuation:
             self.continuation_depth = None
 
@@ -1567,12 +1601,13 @@ def _break_lines(source: str, tokens=None):
     области правки не трогаются; комментарий в конце строки остаётся у
     последней части.
 
-    Возвращает (текст, маска, первые_строки): если переносить нечего — сам
-    source и готовую маску _masked_code (её не нужно считать повторно), иначе
-    новый текст, None и номер (с 0) первой новой строки для каждой исходной.
+    Возвращает (текст, маска, первые_строки): маска — результат _masked_code
+    для нового текста (её не нужно считать повторно), первые_строки — None,
+    если переносить нечего (текст — сам source), иначе номер (с 0) первой
+    новой строки для каждой исходной.
     """
     masked_info = _masked_code(source, tokens)
-    masked, _, _, opaque_lines = masked_info
+    masked, strings, literal_starts, opaque_lines = masked_info
     # Кандидатов обычно единицы: номер строки и её маску находим по месту,
     # не разбивая весь модуль на строки.
     breaks = {}
@@ -1592,39 +1627,87 @@ def _break_lines(source: str, tokens=None):
             breaks[line] = points
     if not breaks:
         return source, masked_info, None
-    lines = _split_lines(source)
     first_newline = _NEWLINE.search(source)
     default_newline = first_newline.group() if first_newline else "\n"
-    output = []
-    first_lines = []
+    # Маска нового текста — те же срезы маски: переносы убирают и вставляют
+    # только пробельные токены, а литералы, комментарии и области правки не
+    # задевают. Начала кусков в старом и новом тексте сдвигают координаты
+    # литералов.
+    output: list[str] = []
+    masked_output: list[str] = []
+    first_lines: list[int] = []
+    old_starts: list[int] = []
+    new_starts: list[int] = []
+    old_offset = new_offset = 0
     count = 0
-    for number, line in enumerate(lines):
+    for number, (line, masked_line) in enumerate(zip(_split_lines(source), _split_lines(masked))):
         first_lines.append(count)
         points = breaks.get(number)
         if points is None:
+            old_starts.append(old_offset)
+            new_starts.append(new_offset)
             output.append(line)
+            masked_output.append(masked_line)
+            old_offset += len(line)
+            new_offset += len(line)
             count += 1
             continue
         newline_match = _NEWLINE.search(line)
         newline = newline_match.group() if newline_match else default_newline
         indent = line[:len(line) - len(line.lstrip(_BLANK))]
-        pieces = []
+        spans = []
         start = 0
         for point in points:
-            pieces.append(line[start:point].rstrip(_BLANK))
+            end = point
+            while end > start and line[end - 1] in _BLANK:
+                end -= 1
+            spans.append((start, end))
             start = point
             while start < len(line) and line[start] in _BLANK:
                 start += 1
-        pieces.append(line[start:])
+        spans.append((start, len(line)))
         # Соседние точки («;» и КонецЕсли за ней) дают пустой кусок.
-        kept = [
-            piece if index == 0 else indent + piece
-            for index, piece in enumerate(pieces)
-            if piece or index == len(pieces) - 1
-        ]
-        output.append(newline.join(kept))
-        count += len(kept)
-    return "".join(output), None, first_lines
+        last = len(spans) - 1
+        first_piece = True
+        for index, (a, b) in enumerate(spans):
+            if a == b and index != last:
+                continue
+            # Новая строка: перевод строки и отступ исходной — пробельные
+            # токены, в маске те же.
+            joint = ("" if first_piece else newline) + (indent if index else "")
+            first_piece = False
+            output.append(joint)
+            masked_output.append(joint)
+            new_offset += len(joint)
+            old_starts.append(old_offset + a)
+            new_starts.append(new_offset)
+            output.append(line[a:b])
+            masked_output.append(masked_line[a:b])
+            new_offset += b - a
+            count += 1
+        old_offset += len(line)
+    return "".join(output), _shift_masked(
+        "".join(masked_output), strings, literal_starts, opaque_lines, first_lines,
+        old_starts, new_starts), first_lines
+
+
+def _shift_masked(masked, strings, literal_starts, opaque_lines, first_lines,
+                  old_starts, new_starts):
+    """Маска после переноса: координаты литералов и строки областей правки.
+
+    old_starts/new_starts — начала кусков текста до и после переноса; позиция
+    внутри куска сдвигается вместе с ним.
+    """
+    def moved(position: int) -> int:
+        index = bisect_right(old_starts, position) - 1
+        return position - old_starts[index] + new_starts[index]
+
+    return (
+        masked,
+        [(moved(start), moved(end - 1) + 1) for start, end in strings],
+        [moved(start) for start in literal_starts],
+        {first_lines[line] for line in opaque_lines},
+    )
 
 
 def format_code(
@@ -1655,20 +1738,21 @@ def format_code(
     tokens = None if _patch_regions(body) else _token_rows(body)
     # Регистр ключевых слов — до форматирования: дальше сверяется уже
     # приведённый текст, а само приведение меняет только регистр букв.
-    rows = tokens if tokens is not None else [
-        (t.kind, t.text, t.start, t.end, t.line, t.column) for t in lex(body)
-    ]
+    rows = tokens if tokens is not None else _token_rows(body)
     cased = canonical_case(rows)
     if cased is not None:
-        cased_body = "".join(row[_TEXT] for row in cased)
-        if len(cased_body) != len(body) or cased_body.casefold() != body.casefold():
-            raise FormatError("приведение регистра изменило текст")
-        body = cased_body
+        # Сверяются только заменённые токены: остальные те же объекты.
+        for old, new in zip(rows, cased):
+            if old is not new and (len(new[_TEXT]) != len(old[_TEXT])
+                                   or new[_TEXT].casefold() != old[_TEXT].casefold()):
+                raise FormatError("приведение регистра изменило текст")
+        body = "".join(row[_TEXT] for row in cased)
         if tokens is not None:
             tokens = cased
     # Перенос инструкций и тел блоков по строкам — до форматирования.
     broken, masked, first_lines = _break_lines(body, tokens)
-    broken_tokens = tokens if first_lines is None or tokens is None else _token_rows(broken)
+    # После переноса токены не нужны: маска нового текста уже готова.
+    broken_tokens = tokens if first_lines is None else None
     # Номера (с 1) удалённых строк-комментариев — их не ждёт итоговая проверка.
     stripped: set[int] | None = set() if strip_body_comments else None
     result = _format_with_patches(broken, max_depth, broken_tokens, stripped, masked)

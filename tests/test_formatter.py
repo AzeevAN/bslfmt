@@ -71,6 +71,8 @@ class FormatterTests(unittest.TestCase):
             ("&НаСервере\nФункция\nФ(А)\nЭкспорт\nВозврат А;\nКонецФункции\n",
              "&НаСервере\nФункция Ф(А) Экспорт\n\tВозврат А;\nКонецФункции\n"),
             ("Асинх Процедура\nП()\nКонецПроцедуры\n", "Асинх Процедура П()\nКонецПроцедуры\n"),
+            ("Function\nF()\nReturn 1;\nEndFunction\n",
+             "Function F()\n\tReturn 1;\nEndFunction\n"),
             ("Асинх Процедура П(А,\nБ)\nКонецПроцедуры\n",
              "Асинх Процедура П(А, Б)\nКонецПроцедуры\n"),
         )
@@ -758,6 +760,23 @@ class FormatterTests(unittest.TestCase):
         for source, expected in cases:
             with self.subTest(source=source):
                 self.assertEqual(format_code(source), expected)
+
+    def test_break_lines_mask_matches_mask_of_broken_text(self):
+        # Маска после переноса строится теми же срезами, что и текст: она
+        # совпадает с маской, посчитанной заново по новому тексту.
+        sources = [case["input"] for case in json.loads(FIXTURES.read_text(encoding="utf-8"))]
+        sources += [
+            'Если А Тогда Б = "x;y"; В = \'20200101\'; КонецЕсли; // к; Г = 1;\n',
+            "А = 1;  Б = 2;\t\tВ = 3;\r\nЕсли А Тогда Б(); Иначе В(); КонецЕсли;\r\n",
+            'Т = "а\n|б"; Х = 1;\n\tЦикл Ф(); КонецЦикла; Р = "в"; С = 2;',
+            "Попытка А(); Исключение Б(); КонецПопытки;\rКонецЕсли;Иначе;",
+        ]
+        for source in sources:
+            with self.subTest(source=source[:40]):
+                broken, masked, first_lines = formatter._break_lines(source)
+                self.assertEqual(masked, formatter._masked_code(broken))
+                if first_lines is not None:
+                    self.assertNotEqual(broken, source)
 
     def test_unary_minus_after_keywords_that_start_expressions(self):
         cases = (
