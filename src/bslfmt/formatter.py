@@ -396,6 +396,76 @@ def _reindent(line: str, depth: int) -> str:
     return "\t" * depth + line[leading:]
 
 
+class _StatementLayout:
+    """Текущая инструкция для раскладки по ширине (README, «Стиль форматирования»).
+
+    Автомат отступов отмечает начало инструкции, её строки и границы, а
+    законченную инструкцию этот класс раскладывает через wrap_statement:
+    замена — всегда в хвосте общего списка строк result.
+    """
+
+    def __init__(self, result: list[str], default_newline: str,
+                 joins: list[tuple[int, int, list[str]]] | None) -> None:
+        self.result = result
+        self.default_newline = default_newline
+        # Куда записать раскладку вместо замены на месте (режим областей правки).
+        self.joins = joins
+        self.start: int | None = None     # индекс первой строки в result
+        self.line = 0                     # номер строки исходника (с 0)
+        self.depth = 0                    # глубина первой строки
+        self.code: list[str] = []         # код строк без комментария
+        self.comment = ""                 # комментарий последней строки
+        self.blocked = False              # раскладка запрещена
+
+    @property
+    def active(self) -> bool:
+        return self.start is not None
+
+    def begin(self, number: int) -> None:
+        self.start = len(self.result)
+        self.line = number
+        self.code = []
+        self.comment = ""
+        self.blocked = False
+
+    def note(self, line: str, comment_start) -> None:
+        """Запомнить код строки; comment_start() — начало её комментария."""
+        if self.blocked:
+            return
+        if not self.code:
+            first = self.result[self.start]
+            self.depth = len(first) - len(first.lstrip("\t"))
+        if self.comment:
+            # Комментарий внутри инструкции: раскладка запрещена.
+            self.blocked = True
+            return
+        position = comment_start()
+        self.code.append(line[:position])
+        self.comment = line[position:].rstrip("\r\n")
+
+    def finish(self) -> None:
+        """Разложить законченную инструкцию."""
+        start, self.start = self.start, None
+        if start is None or self.blocked or not self.code:
+            return
+        lines = self.result[start:]
+        if len(lines) == 1 and not may_need_wrap(self.code[0], self.depth):
+            return
+        wrapped = wrap_statement("\n".join(self.code), self.depth, _normalize_statement)
+        if wrapped is None or (len(lines) == 1 and len(wrapped) == 1):
+            return
+        last = lines[-1]
+        newline = last[len(last.rstrip("\r\n")):]
+        inner = newline or lines[0][len(lines[0].rstrip("\r\n")):] or self.default_newline
+        if self.comment:
+            wrapped[-1] += " " + self.comment
+        new_lines = [text + inner for text in wrapped[:-1]] + [wrapped[-1] + newline]
+        if self.joins is not None:
+            self.joins.append((self.line, self.line + len(lines) - 1, new_lines))
+            return
+        self.result[start:] = new_lines
+
+
 class _LineFormatter:
     """Построчный автомат отступов: состояние блоков, скобок и продолжений."""
 
@@ -453,13 +523,7 @@ class _LineFormatter:
         self.offset = 0
         self.string_index = 0
         # Текущая инструкция для раскладки (README, «Стиль форматирования»).
-        self.joins = joins
-        self.stmt_start: int | None = None     # индекс первой строки в result
-        self.stmt_line = 0                     # номер строки исходника (с 0)
-        self.stmt_depth = 0                    # глубина первой строки
-        self.stmt_code: list[str] = []         # код строк без комментария
-        self.stmt_comment = ""                 # комментарий последней строки
-        self.stmt_blocked = False              # раскладка запрещена
+        self.statement = _StatementLayout(self.result, self.default_newline, joins)
 
     def run(self, collapse_blank_lines: bool = False) -> str:
         region_lines, conditional_lines = _scan_directives(self.code_lines, self.cursor)
@@ -481,15 +545,15 @@ class _LineFormatter:
                     # Литерал на ней не кончается, состояние учтёт следующая.
                     continue
                 # Многострочный литерал: инструкцию не раскладываем.
-                if self.stmt_start is None:
-                    self._start_statement(number)
-                self.stmt_blocked = True
+                if not self.statement.active:
+                    self.statement.begin(number)
+                self.statement.blocked = True
                 self._string_tail_line(line, code)
             elif not line.strip(_BLANK_OR_NEWLINE):
                 # Пустая строка внутри незаконченной инструкции входит в неё
                 # (раскладка её уберёт), иначе инструкция кончилась.
                 if not self._must_continue():
-                    self._finish_statement()
+                    self.statement.finish()
                 self.result.append(line)
             elif line.lstrip(_BLANK).startswith("//"):
                 # Содержимое комментария не форматируется; отступ берётся у
@@ -514,13 +578,13 @@ class _LineFormatter:
                 self._conditional_line(line, conditional_lines[number])
             else:
                 if not self._continues_statement(line, code):
-                    self._finish_statement()
-                    self._start_statement(number)
-                elif self.stmt_start is None:
+                    self.statement.finish()
+                    self.statement.begin(number)
+                elif not self.statement.active:
                     # Продолжение инструкции, законченной пустой строкой или
                     # комментарием: оставляем как есть.
-                    self._start_statement(number)
-                    self.stmt_blocked = True
+                    self.statement.begin(number)
+                    self.statement.blocked = True
                 code_index = len(self.result)
                 self.last_dedent = False
                 if self.pending_header is not None:
@@ -541,9 +605,9 @@ class _LineFormatter:
                 self.statement_open = False
                 self.declaration_open = False
                 self.in_declaration = False
-            if self.stmt_start is not None and not (
+            if self.statement.active and not (
                     self._must_continue() or self.return_pending or self.statement_open):
-                self._finish_statement()
+                self.statement.finish()
         self._finish()
         return _normalize_spacing("".join(self.result), collapse_blank_lines)
 
@@ -851,58 +915,18 @@ class _LineFormatter:
             return True
         return self._is_export_tail(code)
 
-    def _start_statement(self, number: int) -> None:
-        self.stmt_start = len(self.result)
-        self.stmt_line = number
-        self.stmt_code = []
-        self.stmt_comment = ""
-        self.stmt_blocked = False
-
     def _statement_break(self) -> None:
         """Строка, которая не входит в инструкцию (комментарий, директива…)."""
-        if self.stmt_start is None:
+        if not self.statement.active:
             return
         if self._must_continue():
-            self.stmt_blocked = True
+            self.statement.blocked = True
         else:
-            self._finish_statement()
+            self.statement.finish()
 
     def _note_statement_code(self, line: str, code: str) -> None:
         """Запомнить код обработанной строки инструкции и её комментарий."""
-        if self.stmt_blocked:
-            return
-        if not self.stmt_code:
-            first = self.result[self.stmt_start]
-            self.stmt_depth = len(first) - len(first.lstrip("\t"))
-        if self.stmt_comment:
-            # Комментарий внутри инструкции: раскладка запрещена.
-            self.stmt_blocked = True
-            return
-        comment_start = self._comment_start(line, code)
-        self.stmt_code.append(line[:comment_start])
-        self.stmt_comment = line[comment_start:].rstrip("\r\n")
-
-    def _finish_statement(self) -> None:
-        """Разложить законченную инструкцию (замена — всегда в хвосте result)."""
-        start, self.stmt_start = self.stmt_start, None
-        if start is None or self.stmt_blocked or not self.stmt_code:
-            return
-        lines = self.result[start:]
-        if len(lines) == 1 and not may_need_wrap(self.stmt_code[0], self.stmt_depth):
-            return
-        wrapped = wrap_statement("\n".join(self.stmt_code), self.stmt_depth, _normalize_statement)
-        if wrapped is None or (len(lines) == 1 and len(wrapped) == 1):
-            return
-        last = lines[-1]
-        newline = last[len(last.rstrip("\r\n")):]
-        inner = newline or lines[0][len(lines[0].rstrip("\r\n")):] or self.default_newline
-        if self.stmt_comment:
-            wrapped[-1] += " " + self.stmt_comment
-        new_lines = [text + inner for text in wrapped[:-1]] + [wrapped[-1] + newline]
-        if self.joins is not None:
-            self.joins.append((self.stmt_line, self.stmt_line + len(lines) - 1, new_lines))
-            return
-        self.result[start:] = new_lines
+        self.statement.note(line, lambda: self._comment_start(line, code))
 
     def _statement_line(self, line: str, code: str, number: int) -> None:
         after_return = self.return_pending
@@ -1080,7 +1104,7 @@ class _LineFormatter:
                 stack.pop()
 
     def _finish(self) -> None:
-        self._finish_statement()
+        self.statement.finish()
         self.cursor.line = None
         if self.pending_header is not None:
             raise FormatError("незавершённое многострочное условие")
