@@ -188,7 +188,12 @@ def canonical_case(rows):
         for match in _WORD.finditer(text):
             word = match.group()
             start = match.start()
-            before = text[start - 1] if start else previous
+            # Пробельные символы внутри токена кода (NBSP, \u2028…) — не
+            # знак: смотрим на знак перед ними.
+            position = start
+            while position and text[position - 1].isspace():
+                position -= 1
+            before = text[position - 1] if position else previous
             canonical = None
             if not _PLAIN_WORD.fullmatch(word):
                 pass

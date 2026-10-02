@@ -57,11 +57,10 @@ def _is_name_after(text: str, start: int) -> bool:
 
     После «.» — свойство или метод (Объект.Если), после «~» — метка
     (Перейти ~Если; ~Если:): метка — идентификатор, и ключевые слова как
-    имена меток в рабочих конфигурациях встречаются.
+    имена меток в рабочих конфигурациях встречаются. Между знаком и словом
+    допустимы пробельные символы, кроме перевода строки (NBSP, \u2028…).
     """
-    if start and text[start - 1] == ".":
-        return True
     position = start
-    while position and text[position - 1] in _BLANK:
+    while position and text[position - 1] not in "\r\n" and text[position - 1].isspace():
         position -= 1
-    return bool(position) and text[position - 1] == "~"
+    return bool(position) and text[position - 1] in ".~"

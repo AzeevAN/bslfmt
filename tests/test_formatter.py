@@ -122,6 +122,14 @@ class FormatterTests(FormatAssertions, unittest.TestCase):
         self.assertFormats("Если А Тогда Elſe = 1; КонецЕсли;\n",
                            "Если А Тогда\n\tElſe = 1;\nКонецЕсли;\n")
 
+    def test_word_after_dot_and_spaces_is_property(self):
+        # Пробел, NBSP или \u2028 между «.» и словом: слово — свойство, не
+        # ключевое слово, и регистр у него авторский.
+        for gap in (" ", "\xa0", "\u2028", "\x85"):
+            with self.subTest(gap=repr(gap)):
+                self.assertFormats(f"А = Объект.{gap}если;\nБ = 1;\n",
+                                   f"А = Объект.{gap}если;\nБ = 1;\n")
+
     def test_label_named_like_keyword_is_not_structural(self):
         # Метка — идентификатор после «~» (справка, «Перейти»); в рабочих
         # конфигурациях встречаются ~Возврат, ~И, ~попытка.
